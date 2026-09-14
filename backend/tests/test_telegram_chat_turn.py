@@ -201,6 +201,35 @@ def test_worker_sends_email_proposal_card_from_persisted_tool_row(monkeypatch) -
     assert seen["sent"][0][2][0][0]["callback_data"] == "act:prop:send:91"
 
 
+def test_worker_sends_a_card_for_a_composed_email_too(monkeypatch) -> None:
+    """The gap that shipped: the worker named one tool, not the pair.
+
+    The renderer handled either payload and the callback accepted either name,
+    so a composed email produced a turn whose prose promised a card and a chat
+    that never got one. The model then apologises and says it will "actually
+    call the tool this time", which cannot help - it already did.
+    """
+    payload = {
+        "action": "send_new_email",
+        "to": "kartheek@horizonsoftech.net",
+        "cc": "",
+        "subject": "Application for Java Full Stack Developer",
+        "body": "Dear Kartheek,",
+        "document_ids": [],
+        "document_names": [],
+    }
+    tool = SimpleNamespace(id=94, tool_name="propose_new_email", content=__import__("json").dumps(payload))
+    _result, seen = _run_worker(monkeypatch, ChatTurnResult("answer", [tool]))
+    assert seen["sent"][0][2][0][0]["callback_data"] == "act:prop:send:94"
+    assert "starts a new thread" in seen["sent"][0][1]
+
+
+def test_worker_ignores_a_tool_row_that_is_not_an_email_proposal(monkeypatch) -> None:
+    tool = SimpleNamespace(id=95, tool_name="get_status", content="{}")
+    _result, seen = _run_worker(monkeypatch, ChatTurnResult("answer", [tool]))
+    assert "sent" not in seen
+
+
 def test_worker_keeps_answer_when_chart_has_no_provenance(monkeypatch) -> None:
     payload = {
         "action": "render_chart",

@@ -117,11 +117,46 @@ class ManualPremiumContactRequest(BaseModel):
 class ChatSendReplyRequest(BaseModel):
     body: str = Field(min_length=1, max_length=20000)
     subject: str | None = Field(default=None, max_length=998)
+    # Recipient overrides. `None` means "keep what the thread already has", and
+    # `""` on `cc` means "send with no CC at all" - the two must stay distinct,
+    # because dropping the CC is something users ask for and an omitted field
+    # is not a request to drop anything. Validated in the route, never here:
+    # these arrive from a confirmation card the model populated.
+    to: str | None = Field(default=None, max_length=320)
+    cc: str | None = Field(default=None, max_length=2000)
+    # Set by the user's second click, never by the model. An address the owner
+    # has no record of is still sendable - it just costs a deliberate act, the
+    # same shape as `ApproveSendRequest.confirm_same_source_additional_send`.
+    confirm_new_recipients: bool = False
     # Ids of stored candidate documents to attach. Ids rather than names: the
     # confirmation card shows the user the file names it resolved, and a name
     # matched twice - once by the model, once by the server - is a name that can
     # resolve to two different files.
     document_ids: list[int] = Field(default_factory=list, max_length=20)
+    # A resume lives in its own store, so it gets its own field here too.
+    resume_id: int = Field(default=0, ge=0)
+
+
+class ChatNewEmailRequest(BaseModel):
+    """A message that starts its own thread rather than answering one.
+
+    Its own model rather than a flag on the reply request: the two differ in
+    what they *require*. Here `to` and `subject` are mandatory, because there is
+    no thread to take them from - which is the whole difference between
+    composing and replying.
+    """
+
+    to: str = Field(min_length=3, max_length=320)
+    cc: str = Field(default="", max_length=2000)
+    subject: str = Field(min_length=1, max_length=998)
+    body: str = Field(min_length=1, max_length=20000)
+    document_ids: list[int] = Field(default_factory=list, max_length=20)
+    # A resume lives in its own store, so it is its own field. Sending its id
+    # in `document_ids` would resolve nothing, which is exactly the failure the
+    # field exists to stop.
+    resume_id: int = Field(default=0, ge=0)
+    # Set by the user's second click, never by the model.
+    confirm_new_recipients: bool = False
 
 
 class ManualRequirementPreviewRequest(BaseModel):

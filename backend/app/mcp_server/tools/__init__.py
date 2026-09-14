@@ -27,7 +27,7 @@ from app.mcp_server.tools.candidates import (
     propose_bulk_approve_candidates,
     search_candidates,
 )
-from app.mcp_server.tools.email_actions import propose_send_email
+from app.mcp_server.tools.email_actions import propose_new_email, propose_send_email
 from app.mcp_server.tools.external_feed import list_external_opportunities
 from app.mcp_server.tools.help import get_app_help
 from app.mcp_server.tools.candidate_actions import propose_candidate_action
@@ -117,6 +117,7 @@ __all__ = [
     "propose_resume_draft",
     "propose_resume_section",
     "propose_scheduled_task",
+    "propose_new_email",
     "propose_send_email",
     "propose_taxonomy_bulk_review",
     "rank_opportunities",

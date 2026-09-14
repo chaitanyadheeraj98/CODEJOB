@@ -94,6 +94,35 @@ describe('ProposalCard', () => {
     expect(buttonLabelled('Send Email')?.disabled).toBe(true)
   })
 
+  // The defence for a changeable envelope: a stranger costs a deliberate act
+  // the model has no way to perform.
+  it('holds the send until the user vouches for an unknown recipient', () => {
+    const stranger = { ...fields, unknown_recipients: ['stranger@elsewhere.com'], requires_recipient_confirmation: true }
+    const onApprove = vi.fn()
+    render(<ProposalCard handler={handler} fields={stranger} busy={false} disabled={false} onApprove={onApprove} onCancel={vi.fn()} />)
+
+    // Named, not counted - a count is not something a reader can check.
+    expect(container?.querySelector('.chatGroundingCaution')?.textContent).toContain('stranger@elsewhere.com')
+    expect(buttonLabelled('Send Email')?.disabled).toBe(true)
+    act(() => buttonLabelled('Send Email')?.click())
+    expect(onApprove).not.toHaveBeenCalled()
+
+    // click(), not a synthetic change: React tracks the checked value itself
+    // and ignores an event fired at a node whose value it did not see change.
+    const tick = container?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    act(() => tick?.click())
+    expect(buttonLabelled('Send Email')?.disabled).toBe(false)
+    act(() => buttonLabelled('Send Email')?.click())
+    expect(onApprove).toHaveBeenCalledOnce()
+  })
+
+  it('asks nothing extra when every recipient is already known', () => {
+    render(<ProposalCard handler={handler} fields={fields} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
+
+    expect(container?.querySelector('input[type="checkbox"]')).toBeNull()
+    expect(buttonLabelled('Send Email')?.disabled).toBe(false)
+  })
+
   it('replaces the buttons with the outcome once a result exists', () => {
     render(<ProposalCard handler={handler} fields={fields} result={{ approved: true, detail: 'Email sent.' }} busy={false} disabled={false} onApprove={vi.fn()} onCancel={vi.fn()} />)
 

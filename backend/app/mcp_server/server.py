@@ -49,6 +49,7 @@ from app.mcp_server.tools import (
     propose_resume_draft,
     propose_resume_section,
     propose_scheduled_task,
+    propose_new_email,
     propose_send_email,
     propose_taxonomy_bulk_review,
     rank_opportunities,
@@ -131,6 +132,9 @@ CHAT_ACTION_TOOLS = (
     # every other action. What the model contributes is a registry label; the
     # value is checked against the user's own messages on the server.
     propose_profile_update,
+    # Composing, not replying: no candidate and no thread, so the addresses
+    # are graded against saved contacts rather than a conversation.
+    propose_new_email,
     propose_send_email,
     # Copies a stored variant's text into a draft. The variant is opened
     # read-only: what the click creates is a working copy beside it, never an

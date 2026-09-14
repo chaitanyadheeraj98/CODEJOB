@@ -13,9 +13,16 @@ from sqlalchemy.orm import Session
 from app import tenancy
 from app.config import settings
 from app.models import ChatMessage, ChatSession, RecruiterEmail, SyncRun, UserSettings
-from app.schemas import ApproveSendRequest, AutomationRunResponse, ChatSendReplyRequest, EmailResponse, RejectRequest
+from app.schemas import (
+    ApproveSendRequest,
+    AutomationRunResponse,
+    ChatNewEmailRequest,
+    ChatSendReplyRequest,
+    EmailResponse,
+    RejectRequest,
+)
 from app.services import account_service, telegram_chat_service, telegram_link_service
-from app.services.telegram_format import escape
+from app.services.telegram_format import EMAIL_PROPOSAL_TOOLS, escape
 from app.services.telegram_runtime import TelegramRuntimeState
 from app.telegram_bot import TelegramReply
 
@@ -46,6 +53,7 @@ class TelegramRuntimeDeps:
     verify_action_pin: Callable[[str, str], bool]
     auth_ttl_minutes: Callable[[], int]
     send_chat_reply: Callable[[int, ChatSendReplyRequest, Session], dict[str, object]] | None = None
+    send_chat_new_email: Callable[[ChatNewEmailRequest, Session], dict[str, object]] | None = None
     record_proposal_outcome: Callable[..., ChatMessage] | None = None
 
 
@@ -754,13 +762,17 @@ class TelegramRuntime:
                 callback_notice="Awaiting input.",
             )
 
-        if callback_data.startswith("act:prop:send:") or callback_data.startswith("act:prop:cancel:"):
+        if (
+            callback_data.startswith("act:prop:send:")
+            or callback_data.startswith("act:prop:cancel:")
+            or callback_data.startswith("act:prop:force:")
+        ):
             try:
                 _, _, action_name, raw_id = callback_data.split(":", 3)
                 proposal_message_id = int(raw_id)
             except ValueError:
                 return TelegramReply(text="Invalid proposal.", edit_message_id=message_id, callback_notice="Invalid proposal.")
-            if action_name == "send" and not TelegramRuntimeState.session_is_active(chat_id):
+            if action_name in {"send", "force"} and not TelegramRuntimeState.session_is_active(chat_id):
                 TelegramRuntimeState.set_pending_mode(chat_id, f"await_auth_pin|{callback_data}|{message_id}")
                 return TelegramReply(
                     text=self._pending_prompt("await_auth_pin"),
@@ -776,7 +788,7 @@ class TelegramRuntime:
                     .filter(
                         ChatMessage.id == proposal_message_id,
                         ChatMessage.role == "tool",
-                        ChatMessage.tool_name == "propose_send_email",
+                        ChatMessage.tool_name.in_(EMAIL_PROPOSAL_TOOLS),
                         ChatSession.owner_id == tenancy.owner_id(),
                     )
                     .first()
@@ -807,13 +819,65 @@ class TelegramRuntime:
                 if self.deps.send_chat_reply is None:
                     raise RuntimeError("Telegram email sender is unavailable")
                 payload = json.loads(proposal.content)
-                request = ChatSendReplyRequest(
-                    body=str(payload["body"]),
-                    subject=str(payload["subject"]),
-                    document_ids=list(payload.get("document_ids") or []),
-                )
+                unknown_recipients = [
+                    str(value) for value in (payload.get("unknown_recipients") or []) if str(value).strip()
+                ]
+                if action_name == "send" and unknown_recipients:
+                    # A second, deliberate tap. The first Send was a tap on a
+                    # card; this one is an answer to a question naming the
+                    # address, which is the only form of it a user can check.
+                    return TelegramReply(
+                        text=(
+                            "<b>Not in your records:</b> "
+                            + ", ".join(escape(value) for value in unknown_recipients)
+                            + "\n\nThis address is not on the thread and not in your saved "
+                            "contacts. Send anyway?"
+                        ),
+                        inline_keyboard=[[
+                            self._tg_btn("Send anyway", f"act:prop:force:{proposal_message_id}"),
+                            self._tg_btn("Cancel", f"act:prop:cancel:{proposal_message_id}"),
+                        ]],
+                        edit_message_id=message_id,
+                        callback_notice="Confirm the recipient.",
+                    )
+                # Only the second tap carries the recipient confirmation. The
+                # first never can - that is what makes it a second tap.
+                confirmed = action_name == "force"
+                composing = payload.get("action") == "send_new_email"
+                if composing and self.deps.send_chat_new_email is None:
+                    raise RuntimeError("Telegram new-email sender is unavailable")
                 try:
-                    self.deps.send_chat_reply(int(payload["candidate_email_id"]), request, db)
+                    if composing:
+                        self.deps.send_chat_new_email(
+                            ChatNewEmailRequest(
+                                to=str(payload["to"]),
+                                cc=str(payload.get("cc") or ""),
+                                subject=str(payload["subject"]),
+                                body=str(payload["body"]),
+                                document_ids=list(payload.get("document_ids") or []),
+                                resume_id=int(payload.get("resume_id") or 0),
+                                confirm_new_recipients=confirmed,
+                            ),
+                            db,
+                        )
+                    else:
+                        self.deps.send_chat_reply(
+                            int(payload["candidate_email_id"]),
+                            ChatSendReplyRequest(
+                                body=str(payload["body"]),
+                                subject=str(payload["subject"]),
+                                document_ids=list(payload.get("document_ids") or []),
+                                resume_id=int(payload.get("resume_id") or 0),
+                                confirm_new_recipients=confirmed,
+                                # Sent explicitly rather than left to the row, so
+                                # what the card showed is what leaves. A proposal
+                                # drawn before this field existed has no "to" and
+                                # falls back to the thread's.
+                                to=str(payload["to"]) if payload.get("to") is not None else None,
+                                cc=str(payload["cc"]) if payload.get("cc") is not None else None,
+                            ),
+                            db,
+                        )
                 except Exception:
                     self.deps.record_proposal_outcome(
                         db,

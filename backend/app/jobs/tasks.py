@@ -24,7 +24,12 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
     from app.services.chat_service import ChatService
     from app.services.telegram_chat_service import current_session
     from app.services.telegram_chart_render import render_chart_png_bounded
-    from app.services.telegram_format import email_proposal, format_answer, unicode_chart
+    from app.services.telegram_format import (
+        EMAIL_PROPOSAL_TOOLS,
+        email_proposal,
+        format_answer,
+        unicode_chart,
+    )
     from app.telegram_bot import TelegramTransport
 
     correlation_id = uuid4().hex
@@ -45,7 +50,11 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
             proposal_replies = [
                 rendered
                 for row in result.tool_rows
-                if row.tool_name == "propose_send_email"
+                # Both email proposal tools. The renderer already handles either
+                # payload; naming only the reply tool here meant a composed
+                # email produced prose promising a card and no card - the model
+                # then apologises and "tries again", which cannot help.
+                if row.tool_name in EMAIL_PROPOSAL_TOOLS
                 for rendered in [email_proposal(row.content, row.id)]
                 if rendered is not None
             ]

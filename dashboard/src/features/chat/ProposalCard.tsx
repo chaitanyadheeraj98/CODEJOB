@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import type { ProposalFields, ProposalHandler } from './proposals'
 
 export type ProposalResult = { approved: boolean; detail: string } | 'cancelled'
@@ -34,6 +36,16 @@ export default function ProposalCard({ handler, fields, progress, result, busy, 
   // Read, not recomputed: the server owns the threshold, so the caution shown
   // here is the same judgement the tool made when it built the card.
   const lowSimilarity = grounding?.low_similarity === true
+
+  // An address the owner has no record of. The server refuses it without an
+  // explicit act, and the tick below is that act - the user saying they know
+  // who this is, rather than the model saying it.
+  const unknownRecipients = Array.isArray(fields.unknown_recipients)
+    ? fields.unknown_recipients.filter((value): value is string => typeof value === 'string')
+    : []
+  const [recipientAcknowledged, setRecipientAcknowledged] = useState(false)
+  const awaitingRecipientAck = unknownRecipients.length > 0 && !recipientAcknowledged
+
   return (
     <div className="chatProposal">
       <strong>Confirm action</strong>
@@ -53,6 +65,26 @@ export default function ProposalCard({ handler, fields, progress, result, busy, 
         {lowSimilarity ? <p>This wording differs substantially from the current section.</p> : null}
         <p>These are review cautions. Apply only if the new details are accurate.</p>
       </div> : null}
+      {!result && unknownRecipients.length ? (
+        <div className="chatGroundingCaution" role="note">
+          <strong>Check who this is going to</strong>
+          <p>
+            {unknownRecipients.length === 1 ? 'This address is' : 'These addresses are'}
+            {' '}not on this thread and not in your saved contacts:{' '}
+            {unknownRecipients.join(', ')}
+          </p>
+          <label>
+            <input
+              type="checkbox"
+              checked={recipientAcknowledged}
+              onChange={(event) => setRecipientAcknowledged(event.target.checked)}
+              disabled={disabled}
+            />
+            {' '}I know this recipient and mean to write to them.
+          </label>
+        </div>
+      ) : null}
+
       {result === 'cancelled' ? <p>Cancelled. No changes were made.</p> : null}
       {result && result !== 'cancelled' ? (
         <p className={result.approved ? '' : 'chatError'}>{result.detail}</p>
@@ -69,7 +101,7 @@ export default function ProposalCard({ handler, fields, progress, result, busy, 
           <button
             type="button"
             onClick={onApprove}
-            disabled={disabled}
+            disabled={disabled || awaitingRecipientAck}
           >
             {busy ? 'Working...' : handler.confirmLabel(fields)}
           </button>

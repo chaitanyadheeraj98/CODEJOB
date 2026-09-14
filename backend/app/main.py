@@ -267,6 +267,8 @@ from app.services.gmail_group_source_service import (
 )
 from app.services.gmail_labeling_runtime_service import GmailLabelingRuntimeService
 from app.services.email_inbox_service import TRANSPARENT_PIXEL_PNG, record_open, reply_count_for_email
+from app.services.email_recipients import InvalidRecipient, normalize_address, normalize_cc
+from app.services import recipient_trust
 from app.services.github_issue_service import GithubIssueServiceError, create_github_issue
 from app.services import gmail_label_service, gmail_pubsub_service
 from app import gmail_pubsub_subscriber
@@ -393,6 +395,7 @@ from app.schemas import (
     GmailConnectionResponse,
     LabelThreadListResponse, LabelThreadPromoteRequest, RecordLookupResponse,
     LabelOverviewResponse, ThreadDossierResponse,
+    ChatNewEmailRequest,
     ChatSendReplyRequest,
     GithubIssueCreateRequest,
     CustomSkillTaxonomyEntryResponse,
@@ -2002,6 +2005,7 @@ def _init_telegram_service() -> TelegramBotService | None:
             verify_action_pin=_verify_telegram_action_pin,
             auth_ttl_minutes=lambda: max(1, int(settings.telegram_auth_ttl_minutes or 30)),
             send_chat_reply=send_chat_reply,
+            send_chat_new_email=send_chat_new_email,
             record_proposal_outcome=_get_chat_service().record_proposal_outcome,
         )
     )
@@ -10939,6 +10943,29 @@ def approve_and_send(
     return _get_orchestration_service().approve_send(email_id, payload, db)
 
 
+def _resume_attachment(db: Session, resume_id: int) -> MailAttachment | None:
+    """The owner's resume as an attachment, re-resolved at send time.
+
+    Re-resolved rather than trusted from the card for the same reason the
+    documents are: a file deleted between proposal and click has to fail the
+    send, not produce a mail that quietly goes out without it.
+    """
+    if not resume_id:
+        return None
+    resume = (
+        db.query(ResumeAsset)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == resume_id)
+        .first()
+    )
+    if resume is None:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    return MailAttachment(
+        path=resume.file_path,
+        display_name=resume.file_name,
+        mime_type=resume.mime_type,
+    )
+
+
 @app.post(
     "/candidates/{email_id}/send-chat-reply",
     dependencies=[Depends(require_chat_actions_enabled)],
@@ -10949,30 +10976,68 @@ def send_chat_reply(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     email = _get_candidate_for_review(db, email_id)
-    if not (email.recipient_email or "").strip():
+    if not (payload.to if payload.to is not None else email.recipient_email or "").strip():
         raise HTTPException(status_code=400, detail="Recipient email is missing")
     if not (email.external_thread_id or "").strip():
         raise HTTPException(status_code=400, detail="Gmail thread is missing")
+    # Re-validated here even though the tool already did it. These arrive in a
+    # request body that a model populated, and the card is a control only if
+    # the server refuses what the card could not have honestly shown.
+    #
+    # Only overrides are checked. `None` means the thread's own address, which
+    # has always gone out unvalidated, and rejecting it here would break sends
+    # that work today.
+    try:
+        to_address = (
+            normalize_address(payload.to) if payload.to is not None else (email.recipient_email or "").strip()
+        )
+        cc_addresses = (
+            normalize_cc(payload.cc) if payload.cc is not None else (email.cc_email or "").strip()
+        )
+    except InvalidRecipient as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # The model chose the address; the owner's own records decide what that
+    # costs. Graded here rather than trusting the card's grade, because the
+    # card's values arrive in the same request body the addresses did.
+    unknown_recipients = [
+        address
+        for address, level in recipient_trust.grade(
+            db, email, recipient_trust.changed_addresses(email, to_address, cc_addresses)
+        ).items()
+        if level == recipient_trust.NEW
+    ]
+    if unknown_recipients and not payload.confirm_new_recipients:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Not in your records: "
+                + ", ".join(sorted(unknown_recipients))
+                + ". Confirm the recipient to send anyway."
+            ),
+        )
     # Resolved before the send, so an unknown id or a file gone from disk fails
     # with nothing delivered rather than delivering the mail without its files.
     documents = _resolve_candidate_documents(db, payload.document_ids)
+    attachments = [
+        MailAttachment(
+            path=item.file_path,
+            # The label is the user's name for the file, not a file name -
+            # the recruiter gets what was actually uploaded.
+            display_name=item.file_name,
+            mime_type=item.mime_type,
+        )
+        for item in documents
+    ]
+    resume_attachment = _resume_attachment(db, payload.resume_id)
+    if resume_attachment is not None:
+        attachments.append(resume_attachment)
     message_id = send_reply_with_attachment(
         thread_id=email.external_thread_id,
-        to=email.recipient_email,
-        cc=email.cc_email,
+        to=to_address,
+        cc=cc_addresses,
         subject=(payload.subject or email.subject or "").strip(),
         body=payload.body.strip(),
-        attachments=[
-            MailAttachment(
-                path=item.file_path,
-                # The label is the user's name for the file, not a file name -
-                # the recruiter gets what was actually uploaded.
-                display_name=item.file_name,
-                mime_type=item.mime_type,
-            )
-            for item in documents
-        ]
-        or None,
+        attachments=attachments or None,
     )
     _record_productivity_event(
         db,
@@ -10982,14 +11047,91 @@ def send_chat_reply(
         entity_type="RecruiterEmail",
         metadata={
             "gmail_message_id": message_id,
-            "attached_documents": [item.file_name for item in documents],
+            "attached_documents": [item.display_name for item in attachments],
+            # Booleans, not addresses. Whether the envelope was redirected is
+            # worth being able to ask later; who it was redirected to is user
+            # content and does not belong in an event record.
+            "recipient_overridden": to_address.lower() != (email.recipient_email or "").strip().lower(),
+            "cc_overridden": cc_addresses.lower() != (email.cc_email or "").strip().lower(),
         },
     )
     return {
         "sent": True,
         "message_id": message_id,
         "email_id": email.id,
-        "attached_documents": [item.file_name for item in documents],
+        "attached_documents": [item.display_name for item in attachments],
+    }
+
+
+@app.post(
+    "/chat/new-email",
+    dependencies=[Depends(require_chat_actions_enabled)],
+)
+def send_chat_new_email(
+    payload: ChatNewEmailRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Send a message that starts its own thread.
+
+    Deliberately not a branch inside `send_chat_reply`. That route is anchored
+    to a candidate the caller names and refuses without a Gmail thread; this one
+    has neither, and folding them together would mean a request that omitted the
+    candidate could reach the reply path's checks with nothing to check.
+    """
+    try:
+        to_address = normalize_address(payload.to)
+        cc_addresses = normalize_cc(payload.cc)
+    except InvalidRecipient as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # Every address, not only the changed ones: there is no thread here, so
+    # nothing has been vouched for already.
+    addresses = [to_address] + [part.strip() for part in cc_addresses.split(",") if part.strip()]
+    unknown_recipients = [
+        address
+        for address, level in recipient_trust.grade_without_thread(db, addresses).items()
+        if level == recipient_trust.NEW
+    ]
+    if unknown_recipients and not payload.confirm_new_recipients:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Not in your records: "
+                + ", ".join(sorted(unknown_recipients))
+                + ". Confirm the recipient to send anyway."
+            ),
+        )
+    documents = _resolve_candidate_documents(db, payload.document_ids)
+    attachments = [
+        MailAttachment(path=item.file_path, display_name=item.file_name, mime_type=item.mime_type)
+        for item in documents
+    ]
+    resume_attachment = _resume_attachment(db, payload.resume_id)
+    if resume_attachment is not None:
+        attachments.append(resume_attachment)
+    message_id = send_new_email_with_attachment(
+        to=to_address,
+        cc=cc_addresses,
+        subject=payload.subject.strip(),
+        body=payload.body.strip(),
+        attachments=attachments or None,
+    )
+    _record_productivity_event(
+        db,
+        event_type="chat_new_email_sent",
+        event_source="chat_assistant",
+        metadata={
+            "gmail_message_id": message_id,
+            "attached_documents": [item.file_name for item in documents],
+            "attached_resume": bool(payload.resume_id),
+            # Counts and flags only. Who it went to is user content.
+            "recipient_count": len(addresses),
+            "unknown_recipients_confirmed": bool(unknown_recipients),
+        },
+    )
+    return {
+        "sent": True,
+        "message_id": message_id,
+        "attached_documents": [item.display_name for item in attachments],
     }
 
 

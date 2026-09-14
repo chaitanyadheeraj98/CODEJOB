@@ -82,6 +82,13 @@ def format_answer(text: str) -> str:
     return "".join(rendered)
 
 
+# The tools whose rows `email_proposal` can draw. One name lived in three
+# places - the renderer, the worker that decides what to render, and the
+# callback that reloads a card - and the worker was missed when composing was
+# added, so a composed email produced a promise of a card and no card.
+EMAIL_PROPOSAL_TOOLS = frozenset({"propose_send_email", "propose_new_email"})
+
+
 def email_proposal(content: str, message_id: int) -> tuple[str, list[list[dict[str, str]]] | None] | None:
     try:
         payload = json.loads(content)
@@ -94,10 +101,31 @@ def email_proposal(content: str, message_id: int) -> tuple[str, list[list[dict[s
         if not isinstance(missing, list) or not all(isinstance(value, str) and value for value in missing):
             return None
         return f"I need {escape(', '.join(missing))} before I can prepare that email.", None
-    required = ("candidate_email_id", "to", "subject", "body")
-    if payload.get("action") != "send_email" or any(not payload.get(key) for key in required):
+    error = payload.get("error")
+    if isinstance(error, str) and error.strip():
+        # The app contradicting the model, in the app's own words. Without this
+        # a refused tool call renders nothing here, the assistant says the card
+        # is ready, and the only thing that knows better stays silent - the web
+        # front end has said this since it had proposals at all.
+        return (
+            "<b>No confirmation card was created, so nothing has happened.</b>\n"
+            + escape(error.strip()),
+            None,
+        )
+    # Two actions, one card. They differ in whether a candidate id is required:
+    # a reply belongs to one, a new message belongs to nothing.
+    action = payload.get("action")
+    if action == "send_new_email":
+        required: tuple[str, ...] = ("to", "subject", "body")
+    elif action == "send_email":
+        required = ("candidate_email_id", "to", "subject", "body")
+    else:
         return None
-    if not isinstance(payload["candidate_email_id"], int) or payload["candidate_email_id"] <= 0:
+    if any(not payload.get(key) for key in required):
+        return None
+    if action == "send_email" and (
+        not isinstance(payload["candidate_email_id"], int) or payload["candidate_email_id"] <= 0
+    ):
         return None
     document_ids = payload.get("document_ids", [])
     document_names = payload.get("document_names", [])
@@ -112,15 +140,38 @@ def email_proposal(content: str, message_id: int) -> tuple[str, list[list[dict[s
     body = str(payload["body"])
     preview = body if len(body) <= 1500 else body[:1497].rstrip() + "..."
     lines = [
-        "<b>Email ready to send</b>",
+        "<b>New email ready to send</b>" if action == "send_new_email" else "<b>Email ready to send</b>",
         f"<b>To:</b> {escape(payload['to'])}",
         f"<b>Subject:</b> {escape(payload['subject'])}",
     ]
+    if action == "send_new_email":
+        # A reply lands under something the reader recognises. This one does
+        # not, so the card says what it is before it says anything else.
+        lines.insert(1, "<i>This starts a new thread.</i>")
     cc = str(payload.get("cc") or "").strip()
     if cc:
         lines.append(f"<b>CC:</b> {escape(cc)}")
-    if document_names:
-        lines.append("<b>Attachments:</b> " + ", ".join(escape(name) for name in document_names))
+    elif payload.get("cc_changed"):
+        # Said out loud, because an absent line reads as "unchanged" and this
+        # one means the CC the thread had is being dropped.
+        lines.append("<b>CC:</b> none")
+    if payload.get("to_changed"):
+        # The address no longer matches the thread, so recognising it is not
+        # enough - the user has to be told it moved.
+        lines.append("<i>Note: this goes to a different address than the thread.</i>")
+    unknown = [str(value) for value in (payload.get("unknown_recipients") or []) if str(value).strip()]
+    if unknown:
+        # Named, not counted. "One unknown recipient" is not something a user
+        # can check; the address is.
+        lines.append(
+            "<b>Not in your records:</b> " + ", ".join(escape(value) for value in unknown)
+        )
+    attachment_names = [*document_names]
+    resume_name = str(payload.get("resume_name") or "").strip()
+    if resume_name:
+        attachment_names.append(resume_name)
+    if attachment_names:
+        lines.append("<b>Attachments:</b> " + ", ".join(escape(name) for name in attachment_names))
     lines.extend(("<b>Body preview:</b>", f"<pre>{escape(preview)}</pre>"))
     keyboard = [[
         {"text": "Send", "callback_data": f"act:prop:send:{message_id}"},
