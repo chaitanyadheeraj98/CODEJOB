@@ -1619,6 +1619,7 @@ type ConversationSummary = {
   id: number
   root_recruiter_email_id: number | null
   origin?: string
+  watch_value?: string | null
   labels?: string[]
   recruiter: string
   recruiter_email: string | null
@@ -8314,7 +8315,7 @@ function App({ account }: { account?: AuthUser }) {
                             <span className="conversationListIdentity">
                               <span className="conversationListSender">{conversation.recruiter}</span>
                               <span className="conversationListSubject">{conversation.subject}</span>
-                              {conversation.origin && conversation.origin !== 'sent' && <span className="statusBadge">Externally tracked</span>}
+                              {conversation.origin && conversation.origin !== 'sent' && <span className="statusBadge">{conversation.origin === 'watch' ? (conversation.watch_value ? `Watch: ${conversation.watch_value}` : 'Recruiter watch') : 'From Gmail label'}</span>}
                               <span>{(conversation.labels ?? []).map((label) => <span className="statusBadge" key={label}>{label}</span>)}</span>
                             </span>
                             <span className="conversationListMeta">

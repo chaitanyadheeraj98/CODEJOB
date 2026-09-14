@@ -1819,6 +1819,10 @@ class ConversationSummaryResponse(BaseModel):
     id: int
     root_recruiter_email_id: int | None
     origin: str = "sent"
+    # The watch that pulled a `watch` conversation in, named so the badge can
+    # say which one. Often not the sender: a domain watch matches any
+    # participant, so a stranger's mail arrives under a company you follow.
+    watch_value: str | None = None
     labels: list[str] = Field(default_factory=list)
     recruiter: str
     recruiter_email: str | None = None

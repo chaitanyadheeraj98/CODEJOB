@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.models import EmailConversation, EmailReplyMessage, GmailLabel, RecruiterEmail
+from app.models import EmailConversation, EmailReplyMessage, GmailLabel, RecruiterEmail, RecruiterWatch
 from app.services import email_inbox_service as inbox, label_tracking_service as tracking
 
 
@@ -58,6 +58,37 @@ def test_sync_and_watch_capture_create_rootless_conversations():
         inbox.capture_labeled_message(db, owner_id="a", item={**item, "external_message_id": "new-msg"}, owner_email="me@gmail.com", conversation=conv, matched_watch_id=1)
         db.flush()
         assert db.query(EmailReplyMessage).filter_by(external_message_id="new-msg").one().matched_watch_id == 1
+    engine.dispose()
+
+
+def test_the_summary_names_the_watch_that_pulled_the_conversation_in():
+    """A domain watch matches any participant, so the sender shown on a watch
+    conversation is routinely not the thing being followed - a stranger on a
+    freemail address arrives under a company domain watch. Naming the watch is
+    what keeps the badge from reading as a claim about the sender."""
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        watch = RecruiterWatch(owner_id="a", watch_type="domain", value="valzosoft.com", source_thread_ids_json="[]")
+        db.add(watch)
+        db.flush()
+        item = dict(external_message_id="m", external_thread_id="t", sender="Ajay <ajay@gmail.com>",
+            subject="Role", body="Hi", label_ids=[], gmail_received_at=datetime.now(UTC))
+        conv = inbox.ensure_watch_conversation(db, owner_id="a", thread_id="t",
+            watch=SimpleNamespace(id=watch.id, origin_label_external_id="Label_1"), first_item=item)
+        inbox.capture_labeled_message(db, owner_id="a", item=item, owner_email="me@gmail.com",
+            conversation=conv, matched_watch_id=watch.id)
+        db.flush()
+        assert inbox.conversation_detail(db, "a", conv.id).watch_value == "valzosoft.com"
+
+        label_item = {**item, "external_message_id": "m2", "external_thread_id": "t2"}
+        label_conv = inbox.ensure_label_conversation(db, owner_id="a", thread_id="t2",
+            label_external_id="Label_1", first_item=label_item)
+        inbox.capture_labeled_message(db, owner_id="a", item=label_item, owner_email="me@gmail.com",
+            conversation=label_conv)
+        db.flush()
+        # Nothing to name: a label conversation was not pulled in by a watch.
+        assert inbox.conversation_detail(db, "a", label_conv.id).watch_value is None
     engine.dispose()
 
 

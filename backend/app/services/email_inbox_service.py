@@ -14,7 +14,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.gmail_client import GmailMessageCandidate
-from app.models import EmailConversation, EmailOpenEvent, EmailReplyMessage, RecruiterEmail, TrackedThread, GmailLabel
+from app.models import EmailConversation, EmailOpenEvent, EmailReplyMessage, RecruiterEmail, RecruiterWatch, TrackedThread, GmailLabel
 from app.parsing.document_extraction import extract_gmail_reply_body
 from app.recent_runs import build_gmail_message_url
 from app.schemas import ConversationDetailResponse, ConversationMessageResponse, ConversationSummaryResponse
@@ -357,6 +357,28 @@ def _conversation_or_404(db: Session, owner_id: str, conversation_id: int) -> tu
     return conversation, root_email
 
 
+def _matched_watch_value(db: Session, conversation: EmailConversation) -> str | None:
+    """The watch value that brought this conversation in, or None.
+
+    Only `watch` conversations have one. The first match is the one that
+    created the conversation, so it is the honest answer to "why am I seeing
+    this" - later messages can match other watches.
+    """
+    if conversation.origin != "watch":
+        return None
+    row = (
+        db.query(RecruiterWatch.value)
+        .join(EmailReplyMessage, EmailReplyMessage.matched_watch_id == RecruiterWatch.id)
+        .filter(
+            EmailReplyMessage.owner_id == conversation.owner_id,
+            EmailReplyMessage.conversation_id == conversation.id,
+        )
+        .order_by(EmailReplyMessage.received_at.asc(), EmailReplyMessage.id.asc())
+        .first()
+    )
+    return row[0] if row else None
+
+
 def _summary(db: Session, conversation: EmailConversation, root_email: RecruiterEmail | None) -> ConversationSummaryResponse:
     latest = (
         db.query(EmailReplyMessage)
@@ -371,7 +393,8 @@ def _summary(db: Session, conversation: EmailConversation, root_email: Recruiter
     return ConversationSummaryResponse(
         id=conversation.id,
         root_recruiter_email_id=root_email.id if root_email else None,
-        origin=conversation.origin, labels=conversation_label_names(db, conversation),
+        origin=conversation.origin, watch_value=_matched_watch_value(db, conversation),
+        labels=conversation_label_names(db, conversation),
         recruiter=(recruiter_name or (root_email.recipient_email or root_email.sender or "Unknown")) if root_email else (conversation.recruiter_snapshot or "Unknown"),
         recruiter_email=root_email.recipient_email if root_email else conversation.recruiter_email_snapshot,
         subject=root_email.subject if root_email else conversation.subject_snapshot,
