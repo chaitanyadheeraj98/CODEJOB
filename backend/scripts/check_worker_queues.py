@@ -7,7 +7,7 @@ is no error, no log line, and no unit test that can see it - a fake queue in a
 test always succeeds.
 
 So the check is a text comparison between two files that have to agree and have
-no other link: the `command:` of the worker service in docker-compose.yml, and
+no other link: the `command:` lines of the worker services in docker-compose.yml, and
 QUEUE_NAMES in app/jobs/queues.py.
 
 Run it in CI on any change to either file, and by hand before a deploy:
@@ -35,13 +35,13 @@ _QUEUE_CONSTANT_RE = re.compile(r'^[A-Z_]+_QUEUE\s*=\s*"(?P<name>[a-z_]+)"', re.
 
 
 def worker_queues(compose_text: str) -> list[str]:
-    match = _WORKER_COMMAND_RE.search(compose_text)
-    if match is None:
+    matches = list(_WORKER_COMMAND_RE.finditer(compose_text))
+    if not matches:
         raise SystemExit(
             "Could not find the worker `command: rq worker ...` line in docker-compose.yml. "
             "If the worker is started differently now, update this script - do not delete it."
         )
-    return match.group("queues").split()
+    return [name for match in matches for name in match.group("queues").split()]
 
 
 def declared_queues(queues_text: str) -> list[str]:
