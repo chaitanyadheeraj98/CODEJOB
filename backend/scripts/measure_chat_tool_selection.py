@@ -16,7 +16,14 @@ from app.ai.chat.agent import chat_models
 from app.ai.chat.llm import build_chat_llm
 from app.ai.chat.system_prompt import build_system_prompt, prompt_sha256
 from app.config import settings
-from app.mcp_server.server import BASE_TOOLS, CHAT_ACTION_TOOLS, RELATIONSHIP_TOOLS, SCHEDULING_TOOLS
+from app.mcp_server.server import (
+    BASE_TOOLS,
+    CHAT_ACTION_TOOLS,
+    LABEL_TRACKING_ACTION_TOOLS,
+    LABEL_TRACKING_TOOLS,
+    RELATIONSHIP_TOOLS,
+    SCHEDULING_TOOLS,
+)
 from app.mcp_server.tools.support import propose_create_github_issue
 from app.mcp_server.tools.web_search import search_web
 
@@ -35,6 +42,10 @@ def stub_tools(calls):
         functions.extend(RELATIONSHIP_TOOLS)
     if settings.feature_scheduling_enabled:
         functions.extend(SCHEDULING_TOOLS)
+    if settings.feature_label_tracking_enabled:
+        functions.extend(LABEL_TRACKING_TOOLS)
+        if settings.feature_chat_actions_enabled:
+            functions.extend(LABEL_TRACKING_ACTION_TOOLS)
 
     def stub(function):
         def run(**kwargs):

@@ -219,6 +219,16 @@ def test_prompt_version_excludes_dynamic_content_but_tracks_guidance():
         assert prompt_sha256() != initial
 
 
+def test_prompt_separates_tracked_applications_opportunities_and_gates_label_tools():
+    prompt = build_system_prompt()
+    assert "A tracked application is a row in the Application Tracker" in prompt
+    assert "search_opportunities" in prompt
+    with patch.object(settings, "feature_label_tracking_enabled", True):
+        assert "call\nlist_gmail_labels" in build_system_prompt()
+    with patch.object(settings, "feature_label_tracking_enabled", False):
+        assert "call\nlist_gmail_labels" not in build_system_prompt()
+
+
 @pytest.mark.parametrize("failure", ["disconnect", "budget", "raises", "telemetry"])
 def test_partial_transcript_and_telemetry_survive_failure(failure):
     engine = create_engine("sqlite://")

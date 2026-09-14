@@ -278,5 +278,40 @@
     "expected": [
       "get_recent_runs"
     ]
+  },
+  {
+    "id": "last_tracked_application",
+    "question": "What's the last tracked application by me?",
+    "expected": [
+      "list_tracked_applications"
+    ]
+  },
+  {
+    "id": "mail_application_tracking",
+    "question": "Are my mails tracked in the application tracker?",
+    "expected": [
+      "list_tracked_applications"
+    ]
+  },
+  {
+    "id": "gmail_labels",
+    "question": "Check the labels in my inbox.",
+    "expected": [
+      "list_gmail_labels"
+    ]
+  },
+  {
+    "id": "emailed_opportunities",
+    "question": "What are the newest job opportunities that arrived by mail?",
+    "expected": [
+      "search_opportunities"
+    ]
+  },
+  {
+    "id": "java_opportunities",
+    "question": "Search my recruiter opportunities for Java roles.",
+    "expected": [
+      "search_opportunities"
+    ]
   }
 ]
