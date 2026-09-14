@@ -724,6 +724,7 @@ class RecruiterWatch(Base):
     watch_type: Mapped[str] = mapped_column(String(10), index=True)
     value: Mapped[str] = mapped_column(String(255), index=True)
     source_thread_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    source_application_ids_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
     origin_label_external_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     match_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)

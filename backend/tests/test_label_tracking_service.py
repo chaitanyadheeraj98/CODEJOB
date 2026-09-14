@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.models import GmailLabel, TrackedThread, RecruiterWatch, EmailConversation, EmailReplyMessage, UserSettings
+from app.models import AppTSApplication, GmailLabel, TrackedThread, RecruiterWatch, EmailConversation, EmailReplyMessage, UserSettings
 from app.config import settings
 from app.services import label_tracking_service as service
 from app.services.orchestration_service import OrchestrationService
@@ -26,6 +26,16 @@ def thread(db, name="t", labels=None):
     row = TrackedThread(owner_id="a", external_thread_id=name, label_external_ids_json=json.dumps(labels or ["Label_1"]),
         participants_json=json.dumps([{"address": a, "role": r} for a, r in [
             ("me@gmail.com", "to"), ("naman@valzosoft.com", "from"), ("friend@gmail.com", "cc"), ("person@outlook.com", "bcc")]]))
+    db.add(row)
+    db.flush()
+    return row
+
+
+def application(db, status="matched"):
+    row = AppTSApplication(
+        owner_id="a", resume_asset_id=1, resume_version_snapshot=1,
+        resume_file_name_snapshot="resume.pdf", resume_sha256_snapshot="sha", status=status,
+    )
     db.add(row)
     db.flush()
     return row
@@ -79,6 +89,28 @@ def test_reconcile_removal_multiple_labels_and_incomplete_scan(db):
     live["Label_2"] = set()
     assert service.reconcile_untracked(db, "a", deps=deps) == 1
     assert db.query(RecruiterWatch).filter(RecruiterWatch.released_at.is_(None)).count() == 0
+
+
+def test_application_source_survives_until_the_application_is_terminal(db):
+    app = application(db)
+    watch = RecruiterWatch(
+        owner_id="a", watch_type="address", value="recruiter@example.com",
+        source_application_ids_json=json.dumps([app.id]),
+    )
+    dangling = RecruiterWatch(
+        owner_id="a", watch_type="address", value="missing@example.com",
+        source_application_ids_json="[999999]",
+    )
+    db.add_all([watch, dangling])
+    db.flush()
+
+    assert service.reconcile_watches(db, "a") == 1
+    assert watch.released_at is None
+    assert dangling.released_at is not None
+
+    app.status = "rejected"
+    assert service.reconcile_watches(db, "a") == 1
+    assert watch.released_at is not None
 
 
 def test_relabel_stored_messages_and_new_thread_watch(db):

@@ -36,6 +36,7 @@ SHARED_INFRASTRUCTURE_DOMAINS = {
     "sparkpostmail.com", "mandrillapp.com", "bounces.google.com",
 }
 WATCH_QUERY_MAX_TERMS = 20
+APPLICATION_WATCH_TERMINAL_STATUSES = {"rejected", "withdrawn", "no_response", "position_closed", "duplicate"}
 _ADDRESS = re.compile(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}", re.I)
 
 
@@ -353,14 +354,21 @@ def sync_watch_matches(db: Session, owner_id: str, *, deps, owner_email: str = "
 
 def reconcile_watches(db: Session, owner_id: str) -> int:
     db.flush()
-    active = {row.external_thread_id for row in db.query(TrackedThread).filter(
+    active_threads = {row.external_thread_id for row in db.query(TrackedThread).filter(
         TrackedThread.owner_id == owner_id, TrackedThread.untracked_at.is_(None),
     ) if json.loads(row.label_external_ids_json)}
+    live_applications = {row.id for row in db.query(AppTSApplication.id).filter(
+        AppTSApplication.owner_id == owner_id,
+        AppTSApplication.deleted_at.is_(None),
+        AppTSApplication.status.not_in(APPLICATION_WATCH_TERMINAL_STATUSES),
+    )}
     released = 0
     employers = _employer_domains(db, owner_id)
     for watch in db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == owner_id, RecruiterWatch.released_at.is_(None)):
-        sources = set(json.loads(watch.source_thread_ids_json)) & active
-        watch.source_thread_ids_json = json.dumps(sorted(sources))
+        thread_sources = set(json.loads(watch.source_thread_ids_json)) & active_threads
+        application_sources = set(json.loads(watch.source_application_ids_json)) & live_applications
+        watch.source_thread_ids_json = json.dumps(sorted(thread_sources))
+        watch.source_application_ids_json = json.dumps(sorted(application_sources))
         # Blocklist changes have to reach watches already stored, or a domain
         # only ever gets refused at creation and the one derived before the
         # entry was added keeps following strangers forever. googlegroups.com
@@ -377,7 +385,7 @@ def reconcile_watches(db: Session, owner_id: str) -> int:
         watch_domain = watch.value if watch.watch_type == "domain" else domain_of(watch.value)
         employer_hit = _is_employer(watch_domain, employers)
         if (
-            not sources
+            not (thread_sources or application_sources)
             or employer_hit
             or _is_infrastructure(watch_domain)
             or (watch.watch_type == "domain" and _freemail(watch.value))
