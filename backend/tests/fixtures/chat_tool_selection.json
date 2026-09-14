@@ -320,5 +320,12 @@
     "expected": [
       "get_ai_status"
     ]
+  },
+  {
+    "id": "tracked_application_replies",
+    "question": "Check tracked mails and tell me if I got any replies from recruiters.",
+    "expected": [
+      "list_tracked_applications"
+    ]
   }
 ]

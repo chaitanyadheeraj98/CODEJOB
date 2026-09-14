@@ -306,6 +306,12 @@ not an application read. When naming a tracked application, include its
 application id and its record_id whenever the tool returns them, especially for
 "last" or "newest" questions.
 
+For "any replies on my tracked applications" or "check tracked mails and tell
+me if recruiters replied", call list_tracked_applications,
+not get_recruiter_replies. Use `last_reply_at` for the latest reply and
+`unread_count` for unread replies. When both are null, say "no linked thread";
+never turn an unlinked application into a claim that no recruiter replied.
+
 {label_guidance}
 
 For a record ID - the single permanent ID for a candidate or recruiter

@@ -223,6 +223,8 @@ def test_prompt_separates_tracked_applications_opportunities_and_gates_label_too
     prompt = build_system_prompt()
     assert "A tracked application is a row in the Application Tracker" in prompt
     assert "include its\napplication id and its record_id" in prompt
+    assert 'say "no linked thread"' in prompt
+    assert "not get_recruiter_replies" in prompt
     assert "search_opportunities" in prompt
     with patch.object(settings, "feature_label_tracking_enabled", True):
         assert "call\nlist_gmail_labels" in build_system_prompt()

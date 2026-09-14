@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 os.environ["DEBUG"] = "false"
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -659,6 +659,132 @@ class MCPServerToolTests(unittest.TestCase):
         oldest = list_tracked_applications(sort="oldest", role="Python")
         self.assertEqual([row["status"] for row in oldest["applications"]], ["matched"])
         self.assertEqual(list_tracked_applications(sort="highest_score")["status"], "refused")
+
+    def test_application_reply_summary_prefers_thread_and_stays_owner_scoped(self) -> None:
+        now = datetime(2030, 1, 1, tzinfo=UTC)
+        with self.SessionLocal() as db:
+            db.query(UserSettings).filter_by(owner_id=settings.owner_id).one().feature_applications_enabled = True
+            email_conversation = db.get(EmailConversation, self.conversation_id)
+            email_conversation.unread_reply_count = 2
+            db.query(EmailReplyMessage).filter_by(conversation_id=self.conversation_id).one().received_at = now
+            db.add(
+                EmailReplyMessage(
+                    owner_id=settings.owner_id,
+                    conversation_id=self.conversation_id,
+                    direction="inbound",
+                    external_message_id="reply-newer",
+                    received_at=now + timedelta(hours=1),
+                )
+            )
+            preferred = EmailConversation(
+                owner_id=settings.owner_id,
+                external_thread_id="preferred-thread",
+                unread_reply_count=1,
+                last_message_at=now + timedelta(hours=2),
+            )
+            foreign = EmailConversation(
+                owner_id="other-owner",
+                external_thread_id="preferred-thread",
+                unread_reply_count=9,
+                last_message_at=now + timedelta(hours=4),
+            )
+            db.add_all([preferred, foreign])
+            db.flush()
+            db.add_all([
+                EmailReplyMessage(
+                    owner_id=settings.owner_id,
+                    conversation_id=preferred.id,
+                    direction="inbound",
+                    external_message_id="preferred-reply",
+                    received_at=now + timedelta(hours=2),
+                ),
+                EmailReplyMessage(
+                    owner_id="other-owner",
+                    conversation_id=foreign.id,
+                    direction="inbound",
+                    external_message_id="foreign-reply",
+                    received_at=now + timedelta(hours=4),
+                ),
+            ])
+            applications = [
+                AppTSApplication(
+                    owner_id=settings.owner_id,
+                    resume_asset_id=self.resume_id,
+                    resume_version_snapshot=2,
+                    resume_file_name_snapshot="resume.pdf",
+                    resume_sha256_snapshot="a" * 64,
+                    source_recruiter_email_id=self.owned_id,
+                    dedupe_key="reply-email",
+                    created_at=now,
+                ),
+                AppTSApplication(
+                    owner_id=settings.owner_id,
+                    resume_asset_id=self.resume_id,
+                    resume_version_snapshot=2,
+                    resume_file_name_snapshot="resume.pdf",
+                    resume_sha256_snapshot="b" * 64,
+                    source_recruiter_email_id=self.owned_id,
+                    source_thread_id="preferred-thread",
+                    dedupe_key="reply-thread",
+                    created_at=now + timedelta(minutes=1),
+                ),
+                AppTSApplication(
+                    owner_id=settings.owner_id,
+                    resume_asset_id=self.resume_id,
+                    resume_version_snapshot=2,
+                    resume_file_name_snapshot="resume.pdf",
+                    resume_sha256_snapshot="c" * 64,
+                    source_thread_id="missing-thread",
+                    dedupe_key="reply-unlinked",
+                    created_at=now + timedelta(minutes=2),
+                ),
+            ]
+            db.add_all(applications)
+            db.commit()
+            application_ids = [row.id for row in applications]
+
+        rows = {row["id"]: row for row in list_tracked_applications(limit=50)["applications"]}
+        email_linked, thread_linked, unlinked = (rows[row_id] for row_id in application_ids)
+        self.assertEqual(email_linked["last_reply_at"], (now + timedelta(hours=1)).isoformat())
+        self.assertEqual(email_linked["unread_count"], 2)
+        self.assertEqual(thread_linked["last_reply_at"], (now + timedelta(hours=2)).isoformat())
+        self.assertEqual(thread_linked["unread_count"], 1)
+        self.assertIsNone(unlinked["last_reply_at"])
+        self.assertIsNone(unlinked["unread_count"])
+
+    def test_application_reply_aggregate_is_page_scoped(self) -> None:
+        now = datetime.now(UTC)
+        with self.SessionLocal() as db:
+            db.query(UserSettings).filter_by(owner_id=settings.owner_id).one().feature_applications_enabled = True
+            db.add_all([
+                AppTSApplication(
+                    owner_id=settings.owner_id,
+                    resume_asset_id=self.resume_id,
+                    resume_version_snapshot=2,
+                    resume_file_name_snapshot="resume.pdf",
+                    resume_sha256_snapshot=f"{index:064x}",
+                    source_recruiter_email_id=self.owned_id,
+                    dedupe_key=f"reply-page-{index}",
+                    created_at=now + timedelta(minutes=index),
+                )
+                for index in range(50)
+            ])
+            db.commit()
+
+        statements: list[str] = []
+
+        def capture(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+            statements.append(statement.lower())
+
+        event.listen(self.engine, "before_cursor_execute", capture)
+        try:
+            result = list_tracked_applications(limit=50)
+        finally:
+            event.remove(self.engine, "before_cursor_execute", capture)
+
+        self.assertEqual(len(result["applications"]), 50)
+        self.assertEqual(sum("from email_conversations" in statement for statement in statements), 1)
+        self.assertEqual(sum("from email_reply_messages" in statement for statement in statements), 1)
 
     def test_application_detail_is_owner_scoped_and_events_are_optional_untrusted_data(self) -> None:
         now = datetime.now(UTC)
