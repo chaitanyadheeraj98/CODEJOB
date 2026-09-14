@@ -94,13 +94,63 @@ def _is_infrastructure(domain: str) -> bool:
     return bool(domain) and any(domain == d or domain.endswith("." + d) for d in blocked)
 
 
+def _upsert_watch(
+    db: Session,
+    owner_id: str,
+    *,
+    kind: str,
+    value: str,
+    thread_id: str | None = None,
+    application_id: int | None = None,
+    label_external_id: str | None = None,
+    active_count: list[int],
+) -> RecruiterWatch | None:
+    domain = value if kind == "domain" else domain_of(value)
+    if (
+        _is_employer(domain, _employer_domains(db, owner_id))
+        or _is_infrastructure(domain)
+        or (kind == "domain" and _freemail(value))
+    ):
+        return None
+    watch = db.query(RecruiterWatch).filter(
+        RecruiterWatch.owner_id == owner_id,
+        RecruiterWatch.watch_type == kind,
+        RecruiterWatch.value == value,
+    ).first()
+    if watch is None or watch.released_at is not None:
+        if active_count[0] >= settings.label_tracking_max_watches:
+            logger.warning(
+                "label_tracking_watch_limit_reached %s_id=%s",
+                "thread" if thread_id else "application",
+                thread_id or application_id,
+            )
+            return None
+        active_count[0] += 1
+    if watch is None:
+        watch = RecruiterWatch(
+            owner_id=owner_id,
+            watch_type=kind,
+            value=value,
+            source_thread_ids_json="[]",
+            source_application_ids_json="[]",
+            origin_label_external_id=label_external_id,
+        )
+        db.add(watch)
+    if thread_id is not None:
+        watch.source_thread_ids_json = json.dumps(sorted(set(json.loads(watch.source_thread_ids_json)) | {thread_id}))
+    if application_id is not None:
+        watch.source_application_ids_json = json.dumps(sorted(set(json.loads(watch.source_application_ids_json)) | {application_id}))
+    watch.released_at = None
+    db.flush()
+    return watch
+
+
 def derive_watches(db: Session, owner_id: str, *, thread: TrackedThread, owner_email: str) -> list[RecruiterWatch]:
     if thread.owner_id != owner_id or thread.untracked_at or not json.loads(thread.label_external_ids_json):
         return []
     watches = []
     db.flush()
-    active_count = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == owner_id, RecruiterWatch.released_at.is_(None)).count()
-    employers = _employer_domains(db, owner_id)
+    active_count = [db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == owner_id, RecruiterWatch.released_at.is_(None)).count()]
     for address in sorted({normalize_address(p["address"]) for p in json.loads(thread.participants_json)}):
         if address == normalize_address(owner_email) or not _ADDRESS.fullmatch(address):
             continue
@@ -108,25 +158,19 @@ def derive_watches(db: Session, owner_id: str, *, thread: TrackedThread, owner_e
         # Employer participants are dropped whole, address included: the point of
         # the dossier is the recruiter side of the conversation. Group and relay
         # addresses go the same way, for the reason in `_is_infrastructure`.
-        if _is_employer(domain, employers) or _is_infrastructure(domain):
-            continue
         values = [("address", address)] + ([] if _freemail(domain) else [("domain", domain)])
         for kind, value in values:
-            watch = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == owner_id,
-                RecruiterWatch.watch_type == kind, RecruiterWatch.value == value).first()
-            if watch is None or watch.released_at is not None:
-                if active_count >= settings.label_tracking_max_watches:
-                    logger.warning("label_tracking_watch_limit_reached thread_id=%s", thread.external_thread_id)
-                    continue
-                active_count += 1
-            if watch is None:
-                watch = RecruiterWatch(owner_id=owner_id, watch_type=kind, value=value, source_thread_ids_json="[]",
-                    origin_label_external_id=json.loads(thread.label_external_ids_json)[0])
-                db.add(watch)
-            watch.source_thread_ids_json = json.dumps(sorted(set(json.loads(watch.source_thread_ids_json)) | {thread.external_thread_id}))
-            watch.released_at = None
-            db.flush()
-            watches.append(watch)
+            watch = _upsert_watch(
+                db,
+                owner_id,
+                kind=kind,
+                value=value,
+                thread_id=thread.external_thread_id,
+                label_external_id=json.loads(thread.label_external_ids_json)[0],
+                active_count=active_count,
+            )
+            if watch is not None:
+                watches.append(watch)
     return watches
 
 
