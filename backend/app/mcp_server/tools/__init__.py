@@ -36,6 +36,7 @@ from app.mcp_server.tools.charts import get_chart
 from app.mcp_server.tools.record_actions import propose_add_note, propose_record_update
 from app.mcp_server.tools.records import propose_track_record, resolve_record_by_message_id
 from app.mcp_server.tools.analysis import compare_records, rank_opportunities
+from app.mcp_server.tools.applications import get_tracked_application, list_tracked_applications
 from app.mcp_server.tools.metrics import get_metrics
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
 from app.mcp_server.tools.manual_intake import check_manual_intake, propose_manual_requirement
@@ -95,9 +96,11 @@ __all__ = [
     "get_recruiter_replies",
     "get_run_items",
     "get_settings_summary",
+    "get_tracked_application",
     "list_candidate_documents",
     "list_chat_attachments",
     "list_scheduled_tasks",
+    "list_tracked_applications",
     "list_contact_numbers",
     "list_conversations",
     "list_external_opportunities",

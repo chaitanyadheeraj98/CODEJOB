@@ -22,6 +22,7 @@ from app.mcp_server.tools import (
     get_recruiter_replies,
     get_run_items,
     get_settings_summary,
+    get_tracked_application,
     list_candidate_documents,
     list_chat_attachments,
     list_contact_numbers,
@@ -30,6 +31,7 @@ from app.mcp_server.tools import (
     list_gmail_labels,
     list_recruiter_opportunities,
     list_scheduled_tasks,
+    list_tracked_applications,
     list_resume_drafts,
     list_resumes,
     navigate_to_queue,
@@ -114,6 +116,8 @@ BASE_TOOLS = (
     compare_records,
     # Read-only: it returns options, never a pick.
     resolve_record_reference,
+    list_tracked_applications,
+    get_tracked_application,
 )
 
 # MCP shares the API's trusted-host exposure. Tools only read or propose;

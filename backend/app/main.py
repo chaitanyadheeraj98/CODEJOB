@@ -9896,28 +9896,29 @@ def list_appts_applications(
     db: Session = Depends(get_db),
 ) -> ApplicationListResponse:
     _require_applications_enabled(db)
-    if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort")
-    query = db.query(AppTSApplication).filter(AppTSApplication.owner_id == tenancy.owner_id(), AppTSApplication.deleted_at.is_(None))
-    if status:
-        if status not in APPLICATION_STATUS_VALUES: raise HTTPException(status_code=422, detail="Invalid application status")
-        query = query.filter(AppTSApplication.status == status)
-    if q and q.strip():
-        like = f"%{q.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_name_snapshot.ilike(like), AppTSApplication.recruiter_company_snapshot.ilike(like), AppTSApplication.job_title_snapshot.ilike(like), AppTSApplication.end_client_snapshot.ilike(like), AppTSApplication.manual_recruiter_email.ilike(like)))
-    if company and company.strip():
-        like = f"%{company.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_company_snapshot.ilike(like), AppTSApplication.end_client_snapshot.ilike(like)))
-    if recruiter and recruiter.strip():
-        like = f"%{recruiter.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_name_snapshot.ilike(like), AppTSApplication.manual_recruiter_email.ilike(like)))
-    if end_client and end_client.strip(): query = query.filter(AppTSApplication.end_client_snapshot.ilike(f"%{end_client.strip()}%"))
-    if role and role.strip(): query = query.filter(AppTSApplication.job_title_snapshot.ilike(f"%{role.strip()}%"))
-    if has_premium_contact is not None: query = query.filter(AppTSApplication.recruiter_contact_id.is_not(None) if has_premium_contact else AppTSApplication.recruiter_contact_id.is_(None))
-    if tracked is not None: query = query.filter(AppTSApplication.recruiter_opportunity_id.is_not(None) if tracked else AppTSApplication.recruiter_opportunity_id.is_(None))
-    if date_filter:
-        start, end = _date_range_utc_window(date_filter, date_from, date_to); query = query.filter(AppTSApplication.created_at >= start, AppTSApplication.created_at < end)
-    total = query.count()
-    query = query.order_by(AppTSApplication.created_at.asc(), AppTSApplication.id.asc()) if sort == "oldest" else query.order_by(AppTSApplication.next_action_at.is_(None), AppTSApplication.next_action_at.asc(), AppTSApplication.id.asc()) if sort == "next_action" else query.order_by(AppTSApplication.created_at.desc(), AppTSApplication.id.desc())
-    rows = query.offset(cursor).limit(limit + 1).all(); visible = rows[:limit]
+    start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
+    try:
+        visible, total, has_next = appts_service.query_applications(
+            db,
+            tenancy.owner_id(),
+            status=status,
+            q=q,
+            company=company,
+            recruiter=recruiter,
+            end_client=end_client,
+            role=role,
+            has_premium_contact=has_premium_contact,
+            tracked=tracked,
+            date_from=start,
+            date_to=end,
+            sort=sort,
+            cursor=cursor,
+            limit=limit,
+        )
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     watch_count = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == tenancy.owner_id(), RecruiterWatch.released_at.is_(None)).count()
-    return ApplicationListResponse(items=[_application_response(db, row, models=appts_service.APPTS_MODELS) for row in visible], next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total, watch_count=watch_count, watch_limit=settings.label_tracking_max_watches, watch_limit_reached=watch_count >= settings.label_tracking_max_watches)
+    return ApplicationListResponse(items=[_application_response(db, row, models=appts_service.APPTS_MODELS) for row in visible], next_cursor=cursor + limit if has_next else None, has_next=has_next, total=total, watch_count=watch_count, watch_limit=settings.label_tracking_max_watches, watch_limit_reached=watch_count >= settings.label_tracking_max_watches)
 
 
 @app.get("/appts/applications/{application_id}", response_model=ApplicationResponse)
