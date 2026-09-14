@@ -3136,11 +3136,21 @@ class JobListResponse(BaseModel):
     active_count: int
 
 
+class JobQueueStateResponse(BaseModel):
+    name: str
+    queued: int
+    processing: int
+    oldest_queued_age_seconds: int | None
+    alert: bool
+
+
 class JobQueueSummaryResponse(BaseModel):
     queued: int
     processing: int
     succeeded: int
     failed: int
+    queue_status: Literal["known", "unknown"]
+    queues: list[JobQueueStateResponse]
 
 
 class LiveReplyStatusResponse(BaseModel):

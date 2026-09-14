@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -26,6 +27,32 @@ class _FakeQueue:
     def enqueue(self, task, **kwargs):
         self.calls.append({"task": task, **kwargs})
         return SimpleNamespace(id=kwargs["job_id"])
+
+
+class _SummaryConnection:
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+
+    def set(self, key: str, _value: str, *, nx: bool = False):
+        if nx and key in self.keys:
+            return False
+        self.keys.add(key)
+        return True
+
+    def delete(self, key: str) -> None:
+        self.keys.discard(key)
+
+
+class _SummaryQueue:
+    def __init__(self, *, count: int, enqueued_at: datetime | None) -> None:
+        self.count = count
+        self._job = SimpleNamespace(enqueued_at=enqueued_at) if enqueued_at else None
+
+    def get_job_ids(self, _offset: int, _length: int) -> list[str]:
+        return ["oldest"] if self.count else []
+
+    def fetch_job(self, _job_id: str):
+        return self._job
 
 
 class BackgroundJobTests(unittest.TestCase):
@@ -131,6 +158,52 @@ class BackgroundJobTests(unittest.TestCase):
         self.assertEqual(payload["failed"], 1)
         self.assertEqual(payload["queued"], 0)
         self.assertEqual(payload["processing"], 0)
+        self.assertEqual(payload["queue_status"], "unknown")
+        self.assertEqual(payload["queues"], [])
+
+    def test_jobs_summary_alerts_on_age_across_all_queues_once(self) -> None:
+        connection = _SummaryConnection()
+        now = datetime.now(UTC)
+        queues = {
+            name: _SummaryQueue(count=0, enqueued_at=None)
+            for name in main.QUEUE_NAMES
+        }
+        queues[main.TELEGRAM_CHAT_QUEUE] = _SummaryQueue(
+            count=1,
+            enqueued_at=now - timedelta(seconds=61),
+        )
+        queues[main.AUTOMATION_RUN_QUEUE] = _SummaryQueue(
+            count=1,
+            enqueued_at=now - timedelta(minutes=1),
+        )
+        queues[main.GMAIL_EVENT_QUEUE] = _SummaryQueue(count=1, enqueued_at=None)
+        notifications: list[tuple[str, str]] = []
+        service = SimpleNamespace(
+            notify_owner=lambda owner_id, text: notifications.append((owner_id, text))
+        )
+        with (
+            patch.object(main, "get_redis_connection", return_value=connection),
+            patch.object(main, "get_queue", side_effect=lambda name, connection: queues[name]),
+            patch.object(main, "StartedJobRegistry", side_effect=lambda **_kwargs: SimpleNamespace(count=0)),
+            patch.object(main, "telegram_service", service),
+            patch.object(main.settings, "queue_age_interactive_alert_seconds", 60),
+            patch.object(main.settings, "queue_age_bulk_alert_minutes", 30),
+        ):
+            first = self.client.get("/jobs/summary")
+            second = self.client.get("/jobs/summary")
+
+        self.assertEqual(first.status_code, 200)
+        payload = first.json()
+        self.assertEqual(payload["queue_status"], "known")
+        self.assertEqual(len(payload["queues"]), 8)
+        states = {item["name"]: item for item in payload["queues"]}
+        self.assertTrue(states[main.TELEGRAM_CHAT_QUEUE]["alert"])
+        self.assertFalse(states[main.AUTOMATION_RUN_QUEUE]["alert"])
+        self.assertIsNone(states[main.GMAIL_EVENT_QUEUE]["oldest_queued_age_seconds"])
+        self.assertFalse(states[main.GMAIL_EVENT_QUEUE]["alert"])
+        self.assertEqual(len(notifications), 1)
+        self.assertIn("telegram_chat", notifications[0][1])
+        self.assertEqual(second.status_code, 200)
 
     def test_progress_is_monotonic_and_mirrored_to_rq_metadata(self) -> None:
         job = SimpleNamespace(meta={}, save_meta=lambda: None)

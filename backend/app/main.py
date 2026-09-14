@@ -157,9 +157,11 @@ from app.recent_runs import (
 from app.jobs.queues import (
     AUTOMATION_RUN_QUEUE,
     EMBEDDING_QUEUE,
+    GMAIL_EVENT_QUEUE,
     GMAIL_SYNC_QUEUE,
     MANUAL_INTAKE_QUEUE,
     NVOIDS_SYNC_QUEUE,
+    QUEUE_NAMES,
     TELEGRAM_CHAT_QUEUE,
     active_job_id,
     get_queue,
@@ -5230,14 +5232,58 @@ def jobs_health() -> dict[str, object]:
 def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
     queued = 0
     processing = 0
+    queue_status = "known"
+    queue_states: list[dict[str, object]] = []
+    alerts: list[tuple[str, int]] = []
     try:
         connection = get_redis_connection()
-        for name in (GMAIL_SYNC_QUEUE, NVOIDS_SYNC_QUEUE, AUTOMATION_RUN_QUEUE):
+        now = datetime.now(UTC)
+        owner_id = tenancy.owner_id()
+        for name in sorted(QUEUE_NAMES):
             queue = get_queue(name, connection=connection)
-            queued += queue.count
-            processing += StartedJobRegistry(name=name, connection=connection).count
+            queue_count = queue.count
+            processing_count = StartedJobRegistry(name=name, connection=connection).count
+            job_ids = queue.get_job_ids(0, 1)
+            oldest_age = None
+            if job_ids:
+                job = queue.fetch_job(job_ids[0])
+                if job and job.enqueued_at:
+                    enqueued_at = job.enqueued_at
+                    if enqueued_at.tzinfo is None:
+                        enqueued_at = enqueued_at.replace(tzinfo=UTC)
+                    oldest_age = max(0, int((now - enqueued_at).total_seconds()))
+            threshold = (
+                settings.queue_age_interactive_alert_seconds
+                if name in {GMAIL_EVENT_QUEUE, TELEGRAM_CHAT_QUEUE}
+                else settings.queue_age_bulk_alert_minutes * 60
+            )
+            alert = oldest_age is not None and oldest_age >= threshold
+            alert_key = f"queue-age-alert:{owner_id}:{name}"
+            if alert:
+                if connection.set(alert_key, "1", nx=True):
+                    alerts.append((name, oldest_age))
+            else:
+                connection.delete(alert_key)
+            queued += queue_count
+            processing += processing_count
+            queue_states.append(
+                {
+                    "name": name,
+                    "queued": queue_count,
+                    "processing": processing_count,
+                    "oldest_queued_age_seconds": oldest_age,
+                    "alert": alert,
+                }
+            )
     except Exception:
+        queue_status = "unknown"
+        queue_states = []
         logger.exception("jobs_summary_redis_unavailable")
+    if alerts and telegram_service:
+        telegram_service.notify_owner(
+            tenancy.owner_id(),
+            "Queue delay: " + ", ".join(f"{name} oldest job {age}s" for name, age in alerts),
+        )
     succeeded = (
         db.query(RecentRun)
         .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.status == "ok")
@@ -5248,7 +5294,14 @@ def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
         .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.status == "failed")
         .count()
     )
-    return JobQueueSummaryResponse(queued=queued, processing=processing, succeeded=succeeded, failed=failed)
+    return JobQueueSummaryResponse(
+        queued=queued,
+        processing=processing,
+        succeeded=succeeded,
+        failed=failed,
+        queue_status=queue_status,
+        queues=queue_states,
+    )
 
 
 @app.get("/gmail/live-replies", response_model=LiveReplyStatusResponse)

@@ -320,6 +320,8 @@ class Settings(BaseSettings):
     # Deprecated: read only by the one-time telegram_links startup backfill.
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
+    queue_age_interactive_alert_seconds: int = Field(default=60, ge=1)
+    queue_age_bulk_alert_minutes: int = Field(default=30, ge=1)
     telegram_auth_ttl_minutes: int = 30
     feature_telegram_chat_enabled: bool = False
     telegram_chat_retention_days: int = 90
