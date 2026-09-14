@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import asyncio
 import os
 import unittest
@@ -16,6 +17,25 @@ from app.models import ChatMessage
 from app.services.chat_service import ChatService
 
 
+
+class FakeToolSession:
+    """Stand in for the per-turn MCP session.
+
+    The real one yields tools bound to a session that stays open for the turn,
+    so an AsyncMock returning a list no longer matches the shape.
+    """
+
+    def __init__(self, tools=None):
+        self.tools = list(tools or [])
+
+    def __call__(self):
+        return self._session()
+
+    @asynccontextmanager
+    async def _session(self):
+        yield list(self.tools)
+
+
 class FakeGraph:
     async def astream(self, state, **_kwargs):
         yield "messages", (AIMessageChunk(content="There are 3 candidates."), {})
@@ -31,7 +51,7 @@ class FakeGraph:
 
 class ChatServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tools_patch = patch("app.ai.chat.agent.get_mcp_tools", new=AsyncMock(return_value=[]))
+        self.tools_patch = patch("app.ai.chat.agent.mcp_tools", new=FakeToolSession([]))
         self.tools_patch.start()
         self.addCleanup(self.tools_patch.stop)
         self.engine = create_engine(

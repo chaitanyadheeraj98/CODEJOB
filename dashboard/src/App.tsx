@@ -19,11 +19,23 @@ import ChatProvider from './features/chat/ChatProvider'
 import AddProfileEntry from './features/settings/AddProfileEntry'
 import { useChat } from './features/chat/chatContext'
 import ChatWidget from './features/chat/ChatWidget'
-import { getChatStatus } from './features/chat/api'
+import {
+  createTelegramLink,
+  getChatStatus,
+  getTelegramLink,
+  saveOllamaCredential,
+  unlinkTelegram,
+  updateTelegramLink,
+  type TelegramDeepLink,
+  type TelegramLink,
+} from './features/chat/api'
 import type { ChatStatus } from './features/chat/types'
 import PremiumNumbersPage from './features/premium_numbers/PremiumNumbersPage'
 import AppTSPage from './features/application_tracking/AppTSPage'
 import LabelsPage from './features/labels/LabelsPage'
+import LoginPage from './features/auth/LoginPage'
+import { fetchAuthState, logout as signOut, type AuthState, type AuthUser } from './features/auth/api'
+import AccountControls from './components/AccountControls'
 import VerificationBadge from './features/premium_numbers/VerificationBadge'
 import { type CandidateState, useCandidateBuckets } from './candidateBuckets'
 import type { CandidateQueryOptions } from './candidateBuckets'
@@ -240,10 +252,31 @@ export function draftToPreviewHtml(draftText: string): string {
 
 type GmailStatus = {
   configured: boolean
+  // True for a refreshable credential too. It means the app can act on the
+  // mailbox without asking the user, not that the access token is fresh.
   authenticated: boolean
   token_path: string
   last_sync_at: string | null
   detail: string
+  state?: string
+  account_email?: string
+}
+
+// The five backend states, rendered as something a person can act on. The old
+// card showed "Not authenticated" whenever the access token was over an hour
+// old, which is most of the time, and read as "you must reconnect".
+const GMAIL_STATE_LABELS: Record<string, string> = {
+  not_configured: 'Not configured',
+  not_connected: 'Not connected',
+  connected: 'Connected',
+  connected_refreshable: 'Connected',
+  needs_reconnect: 'Reconnect needed',
+}
+
+export function gmailStatusLabel(status: { state?: string; authenticated?: boolean } | null | undefined): string {
+  if (!status) return 'Unknown'
+  if (status.state && GMAIL_STATE_LABELS[status.state]) return GMAIL_STATE_LABELS[status.state]
+  return status.authenticated ? 'Connected' : 'Not connected'
 }
 
 type AiStatus = {
@@ -343,6 +376,7 @@ type SettingsPayload = {
   feature_email_tracking_enabled: boolean
   feature_reply_inbox_enabled: boolean
   feature_label_tracking_enabled?: boolean
+  feature_application_watches_enabled: boolean
   feature_applications_enabled: boolean
   feature_application_automation_enabled: boolean
   feature_application_outreach_drafts_enabled: boolean
@@ -740,6 +774,7 @@ type SettingsBootstrapPayload = {
   settings: SettingsPayload
   role_manifest_child_creation_enabled: boolean
   scheduling_enabled?: boolean
+  user_taxonomy_enabled?: boolean
   gmail_requirement_groups: TrustedGmailGroup[]
   resumes: ResumeAsset[]
   attachments: AttachmentAsset[]
@@ -1584,6 +1619,7 @@ type ConversationSummary = {
   id: number
   root_recruiter_email_id: number | null
   origin?: string
+  watch_value?: string | null
   labels?: string[]
   recruiter: string
   recruiter_email: string | null
@@ -1787,6 +1823,55 @@ type JobQueueSummary = {
 type LiveReplyStatus = {
   count: number
   checked_at: string | null
+}
+
+// Deliberately no history cursor and no resource names. A mailbox position is
+// of no use to a browser, and a topic or subscription path says more about the
+// deployment than a settings page needs to.
+type InboxDelivery = 'disabled' | 'registering' | 'active' | 'delayed' | 'error'
+
+type GmailConnectionStatus = {
+  connected: boolean
+  state: string
+  revoked: boolean
+  inbox_delivery: InboxDelivery
+  watch_expires_at: string | null
+  last_notification_at: string | null
+  last_event_processed_at: string | null
+  consumer_online: boolean
+  watch_error: string
+}
+
+// One line, five states, no jargon. "Live" and "Starting" are the only two a
+// working install ever shows; the other three each name something a person can
+// actually do something about.
+//
+// `delayed` is the one worth being careful with. It means the subscriber is not
+// answering or a notification has gone unprocessed - not that mail is lost. The
+// subscription retains events for seven days, so the honest word is late.
+export const DELIVERY_TEXT: Record<InboxDelivery, { label: string; tone: string; hint: string }> = {
+  active: { label: 'Live', tone: 'ok', hint: 'Gmail changes arrive as they happen.' },
+  registering: { label: 'Starting', tone: 'pending', hint: 'Setting up delivery with Gmail. This takes about a minute.' },
+  delayed: { label: 'Delayed', tone: 'warn', hint: 'Changes are queued and will arrive when delivery resumes. Nothing is lost.' },
+  error: { label: 'Setup required', tone: 'warn', hint: 'Gmail refused the delivery setup. Check the Pub/Sub topic.' },
+  disabled: { label: 'Off', tone: 'muted', hint: 'Turn the Reply Inbox on to receive replies automatically.' },
+}
+
+export function InboxDeliveryStatus({ status }: { status: GmailConnectionStatus | null }) {
+  if (!status) return null
+  // A credential problem outranks anything the watch says: no amount of
+  // delivery setup helps a connection that needs reconnecting, and showing
+  // "Delayed" here would send someone looking in the wrong place.
+  const needsReconnect = status.revoked === true || status.state === 'needs_reconnect'
+  const copy = needsReconnect
+    ? { label: 'Reconnect Gmail', tone: 'warn', hint: 'Sign in with Google again to resume delivery.' }
+    : DELIVERY_TEXT[status.inbox_delivery] ?? DELIVERY_TEXT.disabled
+  return (
+    <p className={`subtle deliveryStatus deliveryStatus--${copy.tone}`} role="status">
+      <span className="deliveryStatus__label">{copy.label}</span>
+      <span className="deliveryStatus__hint">{copy.hint}</span>
+    </p>
+  )
 }
 
 type VerdictLabel = 'Excellent' | 'Strong' | 'Good' | 'Review' | 'Risky'
@@ -2895,11 +2980,20 @@ function CcEmailList({
 // Endpoints that apply the implicit one-day mail_date scope; only these widen on text search.
 const MAIL_DATE_SCOPED_BUCKETS = new Set(['needs_review', 'failed', 'approved_sent', 'recruiter_opportunities'])
 
-function App() {
+function App({ account }: { account?: AuthUser }) {
   const INITIAL_BUCKET_LIMIT = 25
   const PAGE_BUCKET_LIMIT = 25
   const RECENT_RUNS_LIMIT = 100
   const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  // Disables the button for the moment between the request and the reload, so
+  // an impatient second click cannot fire a second logout.
+  const [signingOut, setSigningOut] = useState(false)
+  const handleSignOut = () => {
+    setSigningOut(true)
+    // Reloads on success, so nothing here re-enables the button. On failure it
+    // must come back: the server may simply have been restarting.
+    signOutAndReload(apiBase).catch(() => setSigningOut(false))
+  }
   const defaultPolicy: DynamicPolicy = buildDefaultPolicy()
   const policyProfiles: Record<PolicyProfileName, DynamicPolicy> = {
     'Flexible Drafting': {
@@ -2967,7 +3061,17 @@ function App() {
   const [status, setStatus] = useState<GmailStatus | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
   const [chatStatus, setChatStatus] = useState<ChatStatus | null>(null)
+  const [ollamaApiKey, setOllamaApiKey] = useState('')
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState('')
+  const [ollamaCredentialBusy, setOllamaCredentialBusy] = useState(false)
+  const [ollamaCredentialMessage, setOllamaCredentialMessage] = useState('')
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
+  const [telegramLink, setTelegramLink] = useState<TelegramLink | null>(null)
+  const [telegramLinkBusy, setTelegramLinkBusy] = useState(false)
+  const [telegramDeepLink, setTelegramDeepLink] = useState<TelegramDeepLink | null>(null)
+  const [telegramLinkMessage, setTelegramLinkMessage] = useState('')
+  const [telegramActionPin, setTelegramActionPin] = useState('')
+  const [telegramNow, setTelegramNow] = useState(Date.now())
   const [settings, setSettingsState] = useState<SettingsPayload>({
     enabled: true,
     gmail_query: 'is:unread',
@@ -3009,6 +3113,7 @@ function App() {
     feature_email_tracking_enabled: false,
     feature_reply_inbox_enabled: false,
     feature_label_tracking_enabled: false,
+    feature_application_watches_enabled: false,
     feature_applications_enabled: false,
     feature_application_automation_enabled: false,
     feature_application_outreach_drafts_enabled: false,
@@ -3159,6 +3264,9 @@ function App() {
   const [hasLoadedLearningData, setHasLoadedLearningData] = useState(false)
   const [roleManifestChildCreationEnabled, setRoleManifestChildCreationEnabled] = useState(false)
   const [schedulingEnabled, setSchedulingEnabled] = useState(false)
+  // Defaults true so the cards are present on an older backend that does
+  // not send the flag; the endpoints remain the authority either way.
+  const [userTaxonomyEnabled, setUserTaxonomyEnabled] = useState(true)
   const [skillDraft, setSkillDraft] = useState('')
   const [nvoidsLocationDraft, setNvoidsLocationDraft] = useState('')
   const [acceptedLocationDraft, setAcceptedLocationDraft] = useState('')
@@ -3171,6 +3279,7 @@ function App() {
   const [productivityTrend, setProductivityTrend] = useState<ProductivityTrendResponse | null>(null)
   const [jobSummary, setJobSummary] = useState<JobQueueSummary | null>(null)
   const [liveReplyStatus, setLiveReplyStatus] = useState<LiveReplyStatus | null>(null)
+  const [gmailDelivery, setGmailDelivery] = useState<GmailConnectionStatus | null>(null)
   const datePickerRef = useRef<HTMLInputElement | null>(null)
   const lastTrackedViewRef = useRef<Record<string, number>>({})
   const hasBootstrappedCandidatesRef = useRef(false)
@@ -3411,7 +3520,9 @@ function App() {
   }
 
   const loadChatStatus = async () => {
-    setChatStatus(await getChatStatus(apiBase))
+    const nextStatus = await getChatStatus(apiBase)
+    setChatStatus(nextStatus)
+    setOllamaBaseUrl(nextStatus.ollama_base_url ?? '')
   }
 
   const loadTelegramStatus = async () => {
@@ -3419,6 +3530,19 @@ function App() {
     if (!res.ok) throw new Error('Failed to load Telegram status')
     setTelegramStatus((await res.json()) as TelegramStatus)
   }
+
+  const loadTelegramLink = async () => {
+    const nextLink = await getTelegramLink(apiBase)
+    setTelegramLink(nextLink)
+    return nextLink
+  }
+
+  useEffect(() => {
+    if (!telegramDeepLink) return
+    setTelegramNow(Date.now())
+    const timer = window.setInterval(() => setTelegramNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [telegramDeepLink])
 
   const loadOauthAuthorizationUrl = async () => {
     const res = await fetch(`${apiBase}/gmail/oauth/url`)
@@ -3446,6 +3570,7 @@ function App() {
       feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
       feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
       feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
+      feature_application_watches_enabled: Boolean(payload.feature_application_watches_enabled),
       feature_applications_enabled: Boolean(payload.feature_applications_enabled),
       feature_application_automation_enabled: Boolean(payload.feature_application_automation_enabled),
       feature_application_outreach_drafts_enabled: Boolean(payload.feature_application_outreach_drafts_enabled),
@@ -3549,6 +3674,7 @@ function App() {
     setSettings(normalized)
     setRoleManifestChildCreationEnabled(Boolean(payload.role_manifest_child_creation_enabled))
     setSchedulingEnabled(Boolean(payload.scheduling_enabled))
+    setUserTaxonomyEnabled(payload.user_taxonomy_enabled !== false)
     setGmailRequirementGroups(payload.gmail_requirement_groups ?? [])
     setResumeAssets(payload.resumes ?? [])
     setResumeSkillEdits(Object.fromEntries((payload.resumes ?? []).map((resume) => [resume.id, resume.skills_text ?? ''])))
@@ -3889,6 +4015,12 @@ function App() {
     setLiveReplyStatus((await res.json()) as LiveReplyStatus)
   }
 
+  const loadGmailDelivery = async () => {
+    const res = await fetch(`${apiBase}/gmail/connection`)
+    if (!res.ok) return
+    setGmailDelivery((await res.json()) as GmailConnectionStatus)
+  }
+
   const loadRecentRuns = async (mailDate: string | null = settings.mail_date ?? null) => {
     const params = new URLSearchParams()
     params.set('limit', String(RECENT_RUNS_LIMIT))
@@ -3976,6 +4108,10 @@ function App() {
       setInboxConversations((rows) => rows.map((row) => (
         row.id === conversationId ? { ...row, unread_reply_count: 0 } : row
       )))
+      // The nav count now comes from the server, so reading one here has to
+      // ask again - otherwise the badge sits one higher for up to fifteen
+      // seconds after the row it counted has visibly gone grey.
+      void loadLiveReplyStatus().catch(() => {})
     }
     setSelectedConversation(detail)
   }
@@ -4282,11 +4418,12 @@ function App() {
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        const [, , , , normalizedSettings] = await Promise.all([
+        const [, , , , , normalizedSettings] = await Promise.all([
           loadStatus(),
           loadAiStatus(),
           loadChatStatus().catch(() => {}),
           loadTelegramStatus(),
+          loadTelegramLink().catch(() => {}),
           loadSettingsBootstrap(),
         ])
         loadJobsSummary().catch(() => {})
@@ -4388,8 +4525,10 @@ function App() {
 
   useEffect(() => {
     loadLiveReplyStatus().catch(() => {})
+    loadGmailDelivery().catch(() => {})
     const intervalId = window.setInterval(() => {
       loadLiveReplyStatus().catch(() => {})
+      loadGmailDelivery().catch(() => {})
     }, 15000)
     return () => window.clearInterval(intervalId)
   }, [])
@@ -4606,6 +4745,76 @@ function App() {
       setSaving(false)
     }
   }
+
+  const saveOllamaCredentials = async () => {
+    setOllamaCredentialBusy(true)
+    setOllamaCredentialMessage('')
+    try {
+      const saved = await saveOllamaCredential(apiBase, ollamaApiKey, ollamaBaseUrl)
+      setOllamaApiKey('')
+      setOllamaBaseUrl(saved.base_url)
+      setChatStatus((current) => current ? {
+        ...current,
+        ollama_running: true,
+        ollama_configured: saved.configured,
+        ollama_masked_api_key: saved.masked_api_key,
+        ollama_base_url: saved.base_url,
+        ollama_last_error: null,
+        ollama_last_success_at: new Date().toISOString(),
+      } : current)
+      setOllamaCredentialMessage(`Validated and saved ${saved.masked_api_key ?? 'Ollama key'}.`)
+    } catch (reason) {
+      setOllamaCredentialMessage(reason instanceof Error ? reason.message : 'Failed to validate Ollama credentials')
+    } finally {
+      setOllamaCredentialBusy(false)
+    }
+  }
+
+  const beginTelegramLink = async () => {
+    setTelegramLinkBusy(true)
+    setTelegramLinkMessage('')
+    try {
+      setTelegramDeepLink(await createTelegramLink(apiBase))
+    } catch (reason) {
+      setTelegramLinkMessage(reason instanceof Error ? reason.message : 'Failed to create Telegram link')
+    } finally {
+      setTelegramLinkBusy(false)
+    }
+  }
+
+  const saveTelegramLinkSettings = async (values: { alerts_enabled?: boolean; action_pin?: string }) => {
+    setTelegramLinkBusy(true)
+    setTelegramLinkMessage('')
+    try {
+      setTelegramLink(await updateTelegramLink(apiBase, values))
+      setTelegramActionPin('')
+      setTelegramLinkMessage('Telegram settings saved.')
+    } catch (reason) {
+      setTelegramLinkMessage(reason instanceof Error ? reason.message : 'Failed to update Telegram settings')
+    } finally {
+      setTelegramLinkBusy(false)
+    }
+  }
+
+  const removeTelegramLink = async () => {
+    if (!window.confirm('Unlink this Telegram account from CodeJob?')) return
+    setTelegramLinkBusy(true)
+    setTelegramLinkMessage('')
+    try {
+      await unlinkTelegram(apiBase)
+      setTelegramDeepLink(null)
+      await loadTelegramLink()
+      await loadTelegramStatus()
+    } catch (reason) {
+      setTelegramLinkMessage(reason instanceof Error ? reason.message : 'Failed to unlink Telegram')
+    } finally {
+      setTelegramLinkBusy(false)
+    }
+  }
+
+  const telegramLinkSeconds = telegramDeepLink
+    ? Math.max(0, Math.ceil((Date.parse(telegramDeepLink.expires_at) - telegramNow) / 1000))
+    : 0
 
   const uploadResume = async () => {
     if (!resumeFile) return
@@ -5572,7 +5781,12 @@ function App() {
     setActivePage(hit.section)
   }
 
-  const inboxUnreadCount = inboxConversations.reduce((total, row) => total + row.unread_reply_count, 0)
+  // The server's own total, not a sum over the conversations currently
+  // loaded. The local reduce was both partial and page-dependent: it counted
+  // only the page in memory, and read zero on every screen that had not opened
+  // the Inbox yet - so Settings showed "Inbox 0" while the Inbox showed 11.
+  // `/gmail/live-replies` is polled every fifteen seconds regardless of page.
+  const inboxUnreadCount = liveReplyStatus?.count ?? 0
 
   const renderQueueStatusBar = () => (
     <>
@@ -5715,6 +5929,9 @@ function App() {
         schedulingEnabled={schedulingEnabled}
         activePage={activePage}
         onNavigate={(page) => { window.history.pushState(null, '', `${window.location.pathname}?page=${page}`); setActivePage(page) }}
+        account={account ? { email: account.email, isAdmin: account.is_admin } : undefined}
+        onSignOut={handleSignOut}
+        signingOut={signingOut}
       />
 
       <section className="mainPane">
@@ -5742,7 +5959,7 @@ function App() {
             >
               {nvoidsRunning ? 'Nvoids Syncing...' : 'Sync Nvoids'}
             </button>
-            <span className="syncNowWrap">
+            <span>
               <button
                 type="button"
                 className="btnPrimary"
@@ -5751,14 +5968,11 @@ function App() {
               >
                 {running ? 'Running...' : status?.authenticated ? 'Sync Now' : oauthInProgress ? 'OAuth In Progress...' : 'Connect Gmail'}
               </button>
-              {!running && liveReplyStatus && liveReplyStatus.count > 0 ? (
-                <span
-                  className="liveReplyBadge"
-                  title={`${liveReplyStatus.count} unread in Primary inbox (approx., not confirmed recruiter replies)${liveReplyStatus.checked_at ? ` — checked ${liveReplyStatus.checked_at}` : ''}`}
-                >
-                  {liveReplyStatus.count > 99 ? '99+' : liveReplyStatus.count}
-                </span>
-              ) : null}
+              {/* The unread count used to hang off this button. It counts
+                  replies waiting in the Inbox, and this button starts a
+                  candidate import - two unrelated things, so the number read
+                  as "work Sync Now would do". It now sits on the Inbox nav
+                  item, beside the page it sends you to. */}
             </span>
             {oauthInProgress && oauthAuthorizationUrl ? (
               <a href={oauthAuthorizationUrl} target="_blank" rel="noreferrer" className="btnMuted">
@@ -5935,12 +6149,12 @@ function App() {
               <section className="liveMonitorCard configSummaryCard">
                 <h3>Gmail Access</h3>
                 <div className="configSummaryList">
-                  {configRow('Status', status?.authenticated ? 'Authenticated' : 'Not authenticated')}
+                  {configRow('Status', gmailStatusLabel(status))}
                   {configRow('Configured', status?.configured ? 'Yes' : 'No')}
-                  {configRow('Account', status?.token_path ?? '-')}
+                  {configRow('Account', status?.account_email || status?.token_path || '-')}
                   {configRow('Last Sync', status?.last_sync_at ?? 'Never')}
                   {configRow('Telegram', telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled')}
-                  {configRow('Authorized Chats', telegramStatus?.authorized_chats ?? 0)}
+                  {configRow('Linked Accounts', telegramStatus?.authorized_chats ?? 0)}
                 </div>
               </section>
 
@@ -6140,7 +6354,7 @@ function App() {
                   <div className="row"><span className="label">Account</span><span>{status?.token_path ?? '-'}</span></div>
                   <div className="row"><span className="label">Last Sync</span><span>{status?.last_sync_at ?? 'Never'}</span></div>
                   <div className="row"><span className="label">Telegram</span><span>{telegramStatus?.polling ? 'Connected' : telegramStatus?.enabled ? 'Starting' : 'Disabled'}</span></div>
-                  <div className="row"><span className="label">Authorized Chats</span><span>{telegramStatus?.authorized_chats ?? 0}</span></div>
+                  <div className="row"><span className="label">Linked Accounts</span><span>{telegramStatus?.authorized_chats ?? 0}</span></div>
                 </div>
               </section>
 
@@ -6184,6 +6398,112 @@ function App() {
                   ))}
                   {aiStatus?.last_draft_source ? <div className="row"><span className="label">Draft Source</span><span>{getDraftSourceLabel(aiStatus.last_draft_source)}</span></div> : null}
                   {aiLastDuration ? <div className="row"><span className="label">Last Duration</span><span>{aiLastDuration}</span></div> : null}
+                </div>
+              </section>
+
+              <section className="card">
+                <h2>Integrations</h2>
+                <div className="stack">
+                  <h3>Ollama</h3>
+                  <div className="row"><span className="label">Status</span><span>{chatStatus?.ollama_configured ? 'Configured' : 'API key required'}</span></div>
+                  {chatStatus?.ollama_masked_api_key ? <div className="row"><span className="label">Stored key</span><span className="tag">{chatStatus.ollama_masked_api_key}</span></div> : null}
+                  <label>
+                    API key
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      value={ollamaApiKey}
+                      onChange={(event) => setOllamaApiKey(event.target.value)}
+                      placeholder={chatStatus?.ollama_configured ? 'Paste a new key to replace it' : 'Paste your Ollama API key'}
+                    />
+                  </label>
+                  <label>
+                    Base URL (optional)
+                    <input
+                      type="url"
+                      value={ollamaBaseUrl}
+                      onChange={(event) => setOllamaBaseUrl(event.target.value)}
+                      placeholder="https://ollama.com"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={ollamaCredentialBusy || ollamaApiKey.trim().length < 8}
+                    onClick={() => void saveOllamaCredentials()}
+                  >
+                    {ollamaCredentialBusy ? 'Validating...' : 'Validate and save'}
+                  </button>
+                  {ollamaCredentialMessage ? <p className="subtle" aria-live="polite">{ollamaCredentialMessage}</p> : null}
+                  <h3>Telegram</h3>
+                  {telegramLink?.linked ? (
+                    <>
+                      <p>Connected as {telegramLink.telegram_username ? `@${telegramLink.telegram_username}` : 'Telegram user'} · chat {telegramLink.chat_masked}</p>
+                      <p className="subtle">Linked {formatSettingsDate(telegramLink.linked_at)}</p>
+                      <label className="toggleRow">
+                        <span>Telegram alerts</span>
+                        <span className="toggleSwitch">
+                          <input
+                            type="checkbox"
+                            checked={telegramLink.alerts_enabled}
+                            disabled={telegramLinkBusy}
+                            onChange={(event) => void saveTelegramLinkSettings({ alerts_enabled: event.target.checked })}
+                          />
+                          <span className="toggleTrack" />
+                        </span>
+                      </label>
+                      <label>
+                        Action PIN
+                        <input
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="new-password"
+                          value={telegramActionPin}
+                          onChange={(event) => setTelegramActionPin(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                          placeholder={telegramLink.pin_set ? 'Enter 4-6 digits to change' : 'Set a 4-6 digit PIN'}
+                        />
+                      </label>
+                      <div className="buttonRow">
+                        <button
+                          type="button"
+                          disabled={telegramLinkBusy || !/^\d{4,6}$/.test(telegramActionPin)}
+                          onClick={() => void saveTelegramLinkSettings({ action_pin: telegramActionPin })}
+                        >
+                          {telegramLink.pin_set ? 'Change PIN' : 'Set PIN'}
+                        </button>
+                        {telegramLink.pin_set ? (
+                          <button type="button" disabled={telegramLinkBusy} onClick={() => void saveTelegramLinkSettings({ action_pin: '' })}>
+                            Clear PIN
+                          </button>
+                        ) : null}
+                        <button type="button" disabled={telegramLinkBusy} onClick={() => void removeTelegramLink()}>
+                          Unlink
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="subtle">Connect your Telegram account to the CodeJob bot for account-scoped status, actions, and alerts.</p>
+                      <button type="button" disabled={telegramLinkBusy} onClick={() => void beginTelegramLink()}>
+                        {telegramLinkBusy ? 'Creating link...' : 'Link Telegram'}
+                      </button>
+                      {telegramDeepLink ? (
+                        <div className="stack">
+                          <a href={telegramDeepLink.deep_link} target="_blank" rel="noreferrer">Open the CodeJob bot in Telegram</a>
+                          <button
+                            type="button"
+                            onClick={() => void navigator.clipboard.writeText(telegramDeepLink.deep_link).then(
+                              () => setTelegramLinkMessage('Link copied.'),
+                              () => setTelegramLinkMessage('Could not copy the link.'),
+                            )}
+                          >
+                            Copy link
+                          </button>
+                          <p className="subtle">{telegramLinkSeconds > 0 ? `Expires in ${Math.floor(telegramLinkSeconds / 60)}m ${telegramLinkSeconds % 60}s` : 'Link expired'}</p>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                  {telegramLinkMessage ? <p className="subtle" aria-live="polite">{telegramLinkMessage}</p> : null}
                 </div>
               </section>
 
@@ -6898,7 +7218,20 @@ function App() {
                       <span className="toggleTrack" />
                     </span>
                   </label>
-                  <p className="subtle">Checks unread Gmail on the existing polling interval and captures replies from previously sent threads before JD parsing.</p>
+                  <p className="subtle">Receives Gmail changes through Pub/Sub and captures replies to threads you sent, as they arrive.</p>
+                  <label className="toggleRow pillRow">
+                    <span>Application Recruiter Watches</span>
+                    <span className="toggleSwitch">
+                      <input
+                        type="checkbox"
+                        checked={settings.feature_application_watches_enabled}
+                        onChange={(e) => setSettings({ ...settings, feature_application_watches_enabled: e.target.checked })}
+                      />
+                      <span className="toggleTrack" />
+                    </span>
+                  </label>
+                  <p className="subtle">Follow recruiter replies for tracked applications using the shared recruiter-watch limit.</p>
+                  <InboxDeliveryStatus status={gmailDelivery} />
                   <fieldset>
                     <legend>Gmail label tracking</legend>
                     <label className="toggleRow pillRow">
@@ -7347,64 +7680,83 @@ function App() {
 
           {activePage === 'settings' && hasLoadedSettingsBootstrap ? (
             <div className="configGrid runQueueGrid">
-              <SkillUpgradeSection
-                pendingSkills={pendingSkills}
-                loading={skillsLoading}
-                busySkillKey={skillActionKey}
-                approveAllSkills={approveAllPendingSkills}
-                approveSkill={approvePendingSkill}
-                dismissSkill={dismissPendingSkill}
-                embeddingPendingCount={embeddingPendingCount}
-                embeddingSummary={embeddingSummary}
-                embedSkills={embedPendingSkills}
-                onBulkReview={() => setBulkReviewScope('skill')}
-              />
+              {/* §14 H1. The failure mode this exists for is silent: change
+                  something here, watch it work, assume it shipped - when it
+                  changed one row out of a hundred. Said once, at the top,
+                  quietly, because a banner nobody reads twice is worse than
+                  no banner. */}
+              <p className="boundaryNote">
+                <strong>These settings apply to your account only.</strong> Nothing on this page
+                changes what anyone else sees. Shared behaviour — the parsers, the base
+                vocabulary and the app&rsquo;s own configuration — ships with a deployment.
+              </p>
+              {/* §11.4: hidden when the deployment has switched user
+                  taxonomy off. The endpoints 404 either way; this is
+                  what stops the UI offering a door that is not there. */}
+              {userTaxonomyEnabled ? (
+                <SkillUpgradeSection
+                  pendingSkills={pendingSkills}
+                  loading={skillsLoading}
+                  busySkillKey={skillActionKey}
+                  approveAllSkills={approveAllPendingSkills}
+                  approveSkill={approvePendingSkill}
+                  dismissSkill={dismissPendingSkill}
+                  embeddingPendingCount={embeddingPendingCount}
+                  embeddingSummary={embeddingSummary}
+                  embedSkills={embedPendingSkills}
+                  onBulkReview={() => setBulkReviewScope('skill')}
+                />
+              ) : null}
               <FilterVisibilitySettings
                 visibleFilters={settings.visible_filters}
                 onChange={updateVisibleFilters}
                 resumeAssets={resumeAssets}
                 savingLabel={filterVisibilityStatus}
               />
-              <EntityUpgradeSection
-                title="Upgrade Companies"
-                pendingEntities={pendingCompanies}
-                loading={skillsLoading}
-                busyKey={entityActionKey?.startsWith('company:') ? entityActionKey.slice('company:'.length) : null}
-                approveAll={() => runEntityAction('company', 'approve-all')}
-                approve={(entity) => runEntityAction('company', 'approve', entity)}
-                dismiss={(entity) => runEntityAction('company', 'dismiss', entity)}
-              />
-              <EntityUpgradeSection
-                title="Upgrade Locations"
-                pendingEntities={pendingLocations}
-                loading={skillsLoading}
-                busyKey={entityActionKey?.startsWith('location:') ? entityActionKey.slice('location:'.length) : null}
-                approveAll={() => runEntityAction('location', 'approve-all')}
-                approve={(entity) => runEntityAction('location', 'approve', entity)}
-                dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
-                onBulkReview={() => setBulkReviewScope('location')}
-              />
-              <EntityUpgradeSection
-                title="Upgrade Job Roles"
-                pendingEntities={pendingRoles}
-                loading={skillsLoading}
-                busyKey={entityActionKey?.startsWith('role:') ? entityActionKey.slice('role:'.length) : null}
-                approveAll={() => runEntityAction('role', 'approve-all')}
-                approve={(entity) => runEntityAction('role', 'approve', entity)}
-                dismiss={(entity) => runEntityAction('role', 'dismiss', entity)}
-                onBulkReview={() => setBulkReviewScope('role')}
-              />
-              <JobIntentLearningSection
-                pendingSignals={pendingJobIntentSignals}
-                approvedSignals={approvedJobIntentSignals}
-                embeddedSignals={embeddedJobIntentSignals}
-                loading={jobIntentLoading}
-                busySignalKey={jobIntentActionKey}
-                approveAllSignals={approveAllPendingJobIntentSignals}
-                approveSignal={approvePendingJobIntentSignal}
-                dismissSignal={dismissPendingJobIntentSignal}
-                togglePolarity={toggleJobIntentSignalPolarity}
-              />
+              {userTaxonomyEnabled ? (
+                <>
+                <EntityUpgradeSection
+                  title="Upgrade Companies"
+                  pendingEntities={pendingCompanies}
+                  loading={skillsLoading}
+                  busyKey={entityActionKey?.startsWith('company:') ? entityActionKey.slice('company:'.length) : null}
+                  approveAll={() => runEntityAction('company', 'approve-all')}
+                  approve={(entity) => runEntityAction('company', 'approve', entity)}
+                  dismiss={(entity) => runEntityAction('company', 'dismiss', entity)}
+                />
+                <EntityUpgradeSection
+                  title="Upgrade Locations"
+                  pendingEntities={pendingLocations}
+                  loading={skillsLoading}
+                  busyKey={entityActionKey?.startsWith('location:') ? entityActionKey.slice('location:'.length) : null}
+                  approveAll={() => runEntityAction('location', 'approve-all')}
+                  approve={(entity) => runEntityAction('location', 'approve', entity)}
+                  dismiss={(entity) => runEntityAction('location', 'dismiss', entity)}
+                  onBulkReview={() => setBulkReviewScope('location')}
+                />
+                <EntityUpgradeSection
+                  title="Upgrade Job Roles"
+                  pendingEntities={pendingRoles}
+                  loading={skillsLoading}
+                  busyKey={entityActionKey?.startsWith('role:') ? entityActionKey.slice('role:'.length) : null}
+                  approveAll={() => runEntityAction('role', 'approve-all')}
+                  approve={(entity) => runEntityAction('role', 'approve', entity)}
+                  dismiss={(entity) => runEntityAction('role', 'dismiss', entity)}
+                  onBulkReview={() => setBulkReviewScope('role')}
+                />
+                <JobIntentLearningSection
+                  pendingSignals={pendingJobIntentSignals}
+                  approvedSignals={approvedJobIntentSignals}
+                  embeddedSignals={embeddedJobIntentSignals}
+                  loading={jobIntentLoading}
+                  busySignalKey={jobIntentActionKey}
+                  approveAllSignals={approveAllPendingJobIntentSignals}
+                  approveSignal={approvePendingJobIntentSignal}
+                  dismissSignal={dismissPendingJobIntentSignal}
+                  togglePolarity={toggleJobIntentSignalPolarity}
+                />
+                </>
+              ) : null}
               <TrustedGmailGroupsPanel
                 featureEnabled={settings.feature_gmail_requirement_groups_enabled}
                 groups={gmailRequirementGroups}
@@ -7439,6 +7791,13 @@ function App() {
                 toggleResumeAsset={toggleResumeAsset}
                 deleteResumeAsset={deleteResumeAsset}
               />
+              {account ? (
+                <AccountControls
+                  apiBase={apiBase}
+                  accountEmail={account.email}
+                  onDeactivated={() => { window.location.href = window.location.pathname }}
+                />
+              ) : null}
             </div>
           ) : null}
 
@@ -7909,9 +8268,9 @@ function App() {
                     className={`iconBtn inboxRefreshBtn ${inboxLoading ? 'loading' : ''}`}
                     onClick={() => void refreshInboxReplies()}
                     disabled={inboxLoading}
-                    aria-label="Refresh conversations"
+                    aria-label="Reload inbox"
                     aria-busy={inboxLoading}
-                    title="Refresh"
+                    title="Reload inbox"
                   >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M20 6v5h-5M4 18v-5h5M5.8 9a7 7 0 0 1 11.7-2.6L20 9M4 15l2.5 2.6A7 7 0 0 0 18.2 15" />
@@ -7956,7 +8315,7 @@ function App() {
                             <span className="conversationListIdentity">
                               <span className="conversationListSender">{conversation.recruiter}</span>
                               <span className="conversationListSubject">{conversation.subject}</span>
-                              {conversation.origin && conversation.origin !== 'sent' && <span className="statusBadge">Externally tracked</span>}
+                              {conversation.origin && conversation.origin !== 'sent' && <span className="statusBadge">{conversation.origin === 'watch' ? (conversation.watch_value ? `Watch: ${conversation.watch_value}` : 'Recruiter watch') : 'From Gmail label'}</span>}
                               <span>{(conversation.labels ?? []).map((label) => <span className="statusBadge" key={label}>{label}</span>)}</span>
                             </span>
                             <span className="conversationListMeta">
@@ -8193,4 +8552,43 @@ function App() {
   )
 }
 
-export default App
+/**
+ * Decides whether the app or the login page is shown.
+ *
+ * Wraps App rather than living inside it so that App's own tests - which
+ * render <App /> directly - are untouched by sign-in. That also means the
+ * guard has exactly one job and no access to App's state.
+ *
+ * `disabled` renders the app unchanged. The backend is the authority on
+ * whether sign-in exists, and when it says no this must behave exactly as it
+ * did before any of this was written.
+ */
+function AuthGate() {
+  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  const [state, setState] = useState<AuthState>({ status: 'loading' })
+  const loginError = new URLSearchParams(window.location.search).get('login_error')
+
+  useEffect(() => {
+    let cancelled = false
+    fetchAuthState(apiBase).then((next) => {
+      if (!cancelled) setState(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [apiBase])
+
+  // Nothing, not a spinner: the check is a single local request, and a spinner
+  // that flashes for 30ms reads as jank. What must not happen is rendering the
+  // login page first and replacing it a moment later.
+  if (state.status === 'loading') return null
+  if (state.status === 'anonymous') return <LoginPage apiBase={apiBase} loginError={loginError} />
+  return <App account={state.status === 'signed_in' ? state.user : undefined} />
+}
+
+export async function signOutAndReload(apiBase: string): Promise<void> {
+  await signOut(apiBase)
+  window.location.href = window.location.pathname
+}
+
+export default AuthGate

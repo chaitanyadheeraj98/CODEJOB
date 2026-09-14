@@ -6,6 +6,7 @@ from app.mcp_server.tools import provenance
 from app.models import PremiumNumberContact, RecruiterOpportunity
 from app.services import application_intelligence_service
 from app.services.application_service import ApplicationReferenceNotFoundError
+from app import tenancy
 
 MAX_RANKED = 25
 MAX_COMPARED = 8
@@ -61,7 +62,7 @@ def rank_opportunities(resume_asset_id: int, limit: int = 10) -> dict[str, objec
         try:
             matches = application_intelligence_service.rank_opportunities_for_resume(
                 db,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 resume_asset_id=int(resume_asset_id),
                 limit=capped,
             )
@@ -74,7 +75,7 @@ def rank_opportunities(resume_asset_id: int, limit: int = 10) -> dict[str, objec
         found = {
             row.id: row
             for row in db.query(RecruiterOpportunity).filter(
-                RecruiterOpportunity.owner_id == settings.owner_id,
+                RecruiterOpportunity.owner_id == tenancy.owner_id(),
                 RecruiterOpportunity.id.in_([match.opportunity_id for match in matches]),
             )
         }
@@ -151,7 +152,7 @@ def compare_records(kind: str, ids: list[int]) -> dict[str, object]:
         found = {
             row.id: row
             for row in db.query(PremiumNumberContact).filter(
-                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.owner_id == tenancy.owner_id(),
                 PremiumNumberContact.deleted_at.is_(None),
                 PremiumNumberContact.id.in_(requested),
             )
@@ -165,7 +166,7 @@ def compare_records(kind: str, ids: list[int]) -> dict[str, object]:
                 dropped.append({"key": str(contact_id), "reason": "not_found"})
                 continue
             reputation = application_intelligence_service.compute_recruiter_reputation(
-                db, owner_id=settings.owner_id, recruiter_contact_id=contact_id
+                db, owner_id=tenancy.owner_id(), recruiter_contact_id=contact_id
             )
             columns.append({
                 "record_id": contact_id,

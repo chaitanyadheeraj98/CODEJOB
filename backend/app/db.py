@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, create_engine, event
@@ -37,7 +38,33 @@ class UTCDateTime(TypeDecorator):
 
 is_sqlite = settings.database_url.startswith("sqlite")
 connect_args = {"check_same_thread": False, "timeout": 10} if is_sqlite else {}
-engine = create_engine(settings.database_url, connect_args=connect_args)
+# SQLAlchemy's QueuePool defaults to 5 connections plus 10 overflow - fifteen -
+# and those defaults were never changed. FastAPI runs this application's 261
+# sync endpoints in the anyio threadpool, which holds **40** threads, so forty
+# requests can each want a connection while fifteen exist. The rest queue on
+# the pool and, past `pool_timeout`, fail.
+#
+# Sized here rather than left implicit, and configurable because the right
+# number depends on the process count:
+#
+#     total connections = (pool_size + max_overflow) x API processes + worker
+#
+# At the defaults below that is 20 per process. The deployment runs **two**
+# uvicorn workers plus the RQ worker, so 3 x 20 = 60 against PostgreSQL's
+# default `max_connections` of 100, leaving headroom for migrations and a psql
+# session.
+#
+# Two workers rather than four is the deliberate choice: realistic peak is
+# 5-15 concurrent turns among 100 registered users, so two processes remove the
+# single-process failure mode without needing `max_connections` raised or a
+# pooler introduced. Four would want 100 connections on their own and leave
+# nothing for the worker.
+pool_args = (
+    {}
+    if is_sqlite
+    else {"pool_size": settings.db_pool_size, "max_overflow": settings.db_max_overflow}
+)
+engine = create_engine(settings.database_url, connect_args=connect_args, **pool_args)
 
 
 if is_sqlite:
@@ -56,6 +83,12 @@ if is_sqlite:
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@contextmanager
+def session_scope() -> Generator[Session, None, None]:
+    with SessionLocal.begin() as db:
+        yield db
 
 
 def get_db() -> Generator[Session, None, None]:

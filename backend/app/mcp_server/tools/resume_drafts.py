@@ -27,6 +27,7 @@ from app.services.resume_render_service import (
     section_digest,
     split_sections,
 )
+from app import tenancy
 
 # A ceiling on one rewrite, well under the 50,000 the draft itself allows. It is
 # not a storage limit - it is the size above which the model is being asked to
@@ -38,7 +39,7 @@ MAX_SECTION_CHARS = 8000
 def _draft(db, draft_id: int) -> ResumeDraft | None:
     return (
         db.query(ResumeDraft)
-        .filter(ResumeDraft.owner_id == settings.owner_id, ResumeDraft.id == int(draft_id))
+        .filter(ResumeDraft.owner_id == tenancy.owner_id(), ResumeDraft.id == int(draft_id))
         .first()
     )
 
@@ -61,7 +62,7 @@ def _resolve_draft(db, draft_id: int = 0, name: str = ""):
 
     rows = (
         db.query(ResumeDraft)
-        .filter(ResumeDraft.owner_id == settings.owner_id, ResumeDraft.name.ilike(f"%{query}%"))
+        .filter(ResumeDraft.owner_id == tenancy.owner_id(), ResumeDraft.name.ilike(f"%{query}%"))
         .order_by(ResumeDraft.updated_at.desc())
         .all()
     )
@@ -90,7 +91,7 @@ def _resolve_draft(db, draft_id: int = 0, name: str = ""):
 def _all_drafts(db) -> list[dict[str, object]]:
     rows = (
         db.query(ResumeDraft)
-        .filter(ResumeDraft.owner_id == settings.owner_id)
+        .filter(ResumeDraft.owner_id == tenancy.owner_id())
         .order_by(ResumeDraft.updated_at.desc())
         .all()
     )
@@ -101,7 +102,7 @@ def _not_found(db, draft_id: int) -> dict[str, object]:
     """Say which drafts do exist, so a wrong id is one question, not two."""
     rows = (
         db.query(ResumeDraft)
-        .filter(ResumeDraft.owner_id == settings.owner_id)
+        .filter(ResumeDraft.owner_id == tenancy.owner_id())
         .order_by(ResumeDraft.updated_at.desc())
         .all()
     )
@@ -123,7 +124,7 @@ def list_resume_drafts() -> dict[str, object]:
     try:
         rows = (
             db.query(ResumeDraft)
-            .filter(ResumeDraft.owner_id == settings.owner_id)
+            .filter(ResumeDraft.owner_id == tenancy.owner_id())
             .order_by(ResumeDraft.updated_at.desc(), ResumeDraft.id.desc())
             .all()
         )

@@ -7,6 +7,7 @@ from app.models import ResumeAsset
 from app.schemas import resume_variant_code
 from app.services import role_target_service
 from app.services.resume_render_service import find_section, split_sections
+from app import tenancy
 
 
 def list_resumes(limit: int = 10) -> dict[str, object]:
@@ -15,7 +16,7 @@ def list_resumes(limit: int = 10) -> dict[str, object]:
     try:
         rows = (
             db.query(ResumeAsset)
-            .filter(ResumeAsset.owner_id == settings.owner_id)
+            .filter(ResumeAsset.owner_id == tenancy.owner_id())
             .order_by(ResumeAsset.is_current.desc(), ResumeAsset.updated_at.desc())
             .limit(max(1, min(limit, 25)))
             .all()
@@ -55,7 +56,7 @@ def _resolve_variant(
     if resume_id > 0:
         row = (
             db.query(ResumeAsset)
-            .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == resume_id)
+            .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == resume_id)
             .first()
         )
         return (row, None) if row is not None else (None, {"error": "Resume not found"})
@@ -70,14 +71,14 @@ def _resolve_variant(
         column = getattr(ResumeAsset, field)
         rows = (
             db.query(ResumeAsset)
-            .filter(ResumeAsset.owner_id == settings.owner_id, column.ilike(f"%{query}%"))
+            .filter(ResumeAsset.owner_id == tenancy.owner_id(), column.ilike(f"%{query}%"))
             .all()
         )
         if rows:
             matched_field = field
             break
     if not rows:
-        all_rows = db.query(ResumeAsset).filter(ResumeAsset.owner_id == settings.owner_id).all()
+        all_rows = db.query(ResumeAsset).filter(ResumeAsset.owner_id == tenancy.owner_id()).all()
         return None, {
             "status": "not_found",
             "variant": variant,
@@ -114,7 +115,7 @@ def _resolve_variant(
     row = max(rows, key=lambda item: (item.version, item.id))
     same_file_rows = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id())
         .all()
     )
     row = max(
@@ -153,7 +154,7 @@ def get_resume(resume_id: int = 0, variant: str = "", section: str = "") -> dict
                     "untrusted_resume_data": untrusted("resume", found.body)}
         other_versions = (
             db.query(ResumeAsset)
-            .filter(ResumeAsset.owner_id == settings.owner_id)
+            .filter(ResumeAsset.owner_id == tenancy.owner_id())
             .all()
         )
         return {
@@ -251,7 +252,7 @@ def analyse_role_target(role: str = "", window_days: int = 365) -> dict[str, obj
     try:
         report = role_target_service.analyse_role_target(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             target_role=role,
             window_days=max(1, min(window_days, 730)),
         )

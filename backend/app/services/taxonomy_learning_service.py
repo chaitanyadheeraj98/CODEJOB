@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.base_taxonomy import base_entity_entries
 from app.models import CanonicalEntityTaxonomyEntry, CustomSkillTaxonomyEntry, RecruiterEmail
 from app.semantic.embeddings_service import embedding_to_json, generate_embeddings
 from app.skill_taxonomy import (
@@ -88,7 +89,12 @@ def _entity_values(parser_details_json: str | None, entity_type: str) -> list[st
 
 
 def _suppressed_entity_keys(db: Session, *, owner_id: str, entity_type: str) -> set[str]:
-    suppressed: set[str] = set()
+    suppressed = {
+        key
+        for entry in base_entity_entries(entity_type)
+        for value in (entry.canonical_name, *entry.aliases)
+        if (key := normalize_taxonomy_text(value))
+    }
     rows = (
         db.query(CanonicalEntityTaxonomyEntry)
         .filter(
@@ -192,6 +198,7 @@ def upsert_entity(
     row.occurrence_count = max(int(row.occurrence_count or 0), max(0, occurrence_count))
     row.embedding_status = "pending"
     row.status = status
+    row.suppressed = status == "dismissed"
     if auto_commit:
         db.commit()
         db.refresh(row)

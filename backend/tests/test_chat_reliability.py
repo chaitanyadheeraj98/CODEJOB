@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -17,8 +18,11 @@ from app.ai.chat import agent, mcp_client, turns
 from app.ai.chat.failures import FAILURE_MESSAGES, FALLBACK_MESSAGE, classify_ollama_error, tool_error
 from app.ai.chat.history import db_messages_to_langchain
 from app.ai.chat.system_prompt import build_system_prompt, prompt_sha256
+from app import tenancy
 from app.config import settings
 from app.db import Base
+from app.services import admission_service
+from app.services.admission_service import AdmissionRejected
 from app.mcp_server.tools import needs, refused, untrusted
 from app.models import ChatMessage, ChatTurn
 from app.runtime_state import runtime_state
@@ -43,12 +47,14 @@ class Graph:
 
 
 def collect(graphs, **kwargs):
+    session = FakeToolSession([])
+
     async def run():
-        with patch.object(agent, "get_mcp_tools", new=AsyncMock(return_value=[])) as tools, patch.object(
+        with patch.object(agent, "mcp_tools", session), patch.object(
             agent, "build_chat_agent", new=AsyncMock(side_effect=graphs)
         ) as build, patch.object(agent.asyncio, "sleep", new=AsyncMock()):
             events = [event async for event in agent.stream_chat_agent([HumanMessage(content="hi")], **kwargs)]
-            return events, build, tools
+            return events, build, session
     return asyncio.run(run())
 
 
@@ -66,7 +72,8 @@ def test_failure_codes(status, code):
 def test_retry_same_model_then_failover_and_terminal_stop():
     events, build, tools = collect([Graph(error=httpx.ConnectError("offline")), Graph()])
     assert build.call_args_list[0].args == build.call_args_list[1].args
-    assert tools.await_count == 1
+    assert tools.opens == 1, "one session per turn, not one per model attempt"
+    assert tools.closes == 1, "and it must be closed"
     assert dict(events)["telemetry"]["attempts"] == 2
     assert dict(events)["telemetry"]["prompt_tokens"] == 12
     _, build, _ = collect([Graph(error=httpx.ConnectError("offline"))] * 2 + [Graph()])
@@ -86,7 +93,7 @@ def test_never_retry_after_a_delta_and_unknown_errors_stay_generic():
 def test_mcp_failure_after_ready_does_not_attempt_models():
     async def run():
         runtime_state.chat_mcp_status = "ready"
-        with patch.object(agent, "get_mcp_tools", new=AsyncMock(side_effect=ConnectionError())), patch.object(agent, "build_chat_agent") as build:
+        with patch.object(agent, "mcp_tools", FakeToolSession(error=ConnectionError())), patch.object(agent, "build_chat_agent") as build:
             events = [e async for e in agent.stream_chat_agent([])]
             assert not build.called
             assert dict(events)["error"]["code"] == "mcp_unavailable"
@@ -112,12 +119,65 @@ def test_tool_budget_substitution_is_a_failure_but_a_final_answer_at_the_limit_i
     assert classify_ollama_error(httpx.ReadTimeout("timeout")) == "ollama_timeout"
 
 
-def test_tool_cache_serializes_first_load_and_reuses_it():
+def test_tools_run_in_the_callers_context_so_they_see_the_callers_owner():
+    """Replaces the old tool-cache test, which guarded a cache that no longer
+    exists - the tools moved in-process, so there are no HTTP round trips left
+    to amortise.
+
+    What replaces it is the reason the move happened. The tools used to be
+    reached over loopback HTTP with no session cookie, so every tool ran as the
+    fallback owner no matter who asked. An in-process session inherits the
+    caller's ContextVar instead.
+
+    Worth asserting directly, because the wrong version compiles and passes
+    everything else: a session opened once at start-up rather than per turn
+    captures the start-up context, and every tool then serves the fallback
+    owner forever - which is the original bug wearing a different hat.
+    """
+    from app.mcp_server.server import mcp
+
     async def run():
-        with patch.object(mcp_client, "_tools", None), patch.object(mcp_client, "_lock", asyncio.Lock()), patch.object(mcp_client, "_load_tools", new=AsyncMock(return_value=[])) as load:
-            await asyncio.gather(mcp_client.get_mcp_tools(), mcp_client.get_mcp_tools())
-            await mcp_client.get_mcp_tools()
-            assert load.await_count == 1
+        seen = []
+
+        def owner_probe() -> str:
+            """Report the owner this tool sees."""
+            seen.append(tenancy.owner_id())
+            return "ok"
+
+        async def turn_as(owner: str) -> None:
+            reset = tenancy.set_owner_id(owner)
+            try:
+                async with mcp_client.mcp_tools() as tools:
+                    assert len(tools) > 1, "the real server must expose its tools"
+                    probe = next(t for t in tools if t.name == "owner_probe")
+                    await probe.ainvoke({})
+            finally:
+                tenancy.reset_owner_id(reset)
+
+        mcp.add_tool(owner_probe, name="owner_probe")
+        try:
+            # Two turns, two owners. One turn alone proves nothing: a session
+            # opened once and reused would be created inside the *first*
+            # caller's context and look perfectly correct - and then serve that
+            # owner to everybody after. The second turn is the assertion.
+            await turn_as("usr_first_caller")
+            await turn_as("usr_second_caller")
+        finally:
+            mcp.remove_tool("owner_probe")
+
+        assert seen == ["usr_first_caller", "usr_second_caller"]
+
+    asyncio.run(run())
+
+
+def test_the_tool_session_is_closed_with_the_turn():
+    """A session left open holds the server task for the life of the process."""
+    async def run():
+        async with mcp_client.mcp_tools() as tools:
+            first = len(tools)
+        async with mcp_client.mcp_tools() as tools:
+            assert len(tools) == first, "each turn gets its own equivalent session"
+
     asyncio.run(run())
 
 
@@ -176,7 +236,7 @@ def test_partial_transcript_and_telemetry_survive_failure(failure):
             if failure == "telemetry" and isinstance(row, ChatTurn):
                 raise RuntimeError("telemetry unavailable")
             original_add(row)
-        with patch.object(settings, "chat_turn_budget_seconds", 0.03 if failure == "budget" else 240), patch.object(agent, "get_mcp_tools", new=AsyncMock(return_value=[])), patch.object(agent, "build_chat_agent", new=AsyncMock(return_value=graph)), patch.object(db, "add", side_effect=add):
+        with patch.object(settings, "chat_turn_budget_seconds", 0.03 if failure == "budget" else 240), patch.object(agent, "mcp_tools", FakeToolSession([])), patch.object(agent, "build_chat_agent", new=AsyncMock(return_value=graph)), patch.object(db, "add", side_effect=add):
             stream = service.send_message(db, session.id, "hi")
             events = []
             async for event in stream:
@@ -203,6 +263,35 @@ def test_partial_transcript_and_telemetry_survive_failure(failure):
         engine.dispose()
 
 
+class FakeToolSession:
+    """Stand in for the per-turn MCP session, counting opens and closes.
+
+    The real one yields tools bound to a session that must stay open for the
+    whole turn, so a plain AsyncMock returning a list no longer matches the
+    shape - and the counts are the point: one session per turn however many
+    model attempts it takes, and always closed.
+    """
+
+    def __init__(self, tools=None, *, error=None):
+        self.tools = list(tools or [])
+        self.error = error
+        self.opens = 0
+        self.closes = 0
+
+    def __call__(self):
+        return self._session()
+
+    @asynccontextmanager
+    async def _session(self):
+        self.opens += 1
+        if self.error is not None:
+            raise self.error
+        try:
+            yield list(self.tools)
+        finally:
+            self.closes += 1
+
+
 def _service_session(db):
     service = ChatService()
     return service, service.create_session(db)
@@ -221,7 +310,7 @@ def test_stopping_a_turn_labels_it_and_keeps_what_was_already_written():
 
     async def run(db):
         service, session = _service_session(db)
-        with patch.object(agent, "get_mcp_tools", new=AsyncMock(return_value=[])), patch.object(
+        with patch.object(agent, "mcp_tools", FakeToolSession([])), patch.object(
             agent, "build_chat_agent", new=AsyncMock(return_value=Graph(partial=True, delay=5))
         ):
             events = []
@@ -256,17 +345,50 @@ def test_a_rejected_turn_is_recorded_rather_than_silently_dropped():
     Base.metadata.create_all(engine)
     with Session(engine) as db:
         service, session = _service_session(db)
-        held = [turns.slots.acquire(blocking=False) for _ in range(settings.chat_max_concurrent_turns)]
-        try:
-            assert all(held)
+        # The refusal is forced rather than produced by filling a real pool.
+        # Admission moved to Redis in C1, and what this test is named for is
+        # that a *rejected* turn leaves a row - not how the rejection was
+        # reached. The caps themselves are covered against a real Redis in
+        # test_admission_service.py, including under a concurrent burst.
+        with patch.object(
+            admission_service,
+            "acquire_async",
+            side_effect=AdmissionRejected("global", "The assistant is handling other turns."),
+        ):
             with pytest.raises(HTTPException) as rejected:
                 asyncio.run(anext(service.send_message(db, session.id, "hi")))
             assert rejected.value.status_code == 503
-        finally:
-            for _ in held:
-                turns.slots.release()
         turn = db.query(ChatTurn).one()
         assert turn.failure_code == "admission_rejected" and turn.message_id is None
+
+
+def test_a_turn_waits_for_a_slot_before_being_refused():
+    """C2 - the wiring, not the waiting.
+
+    `acquire_async` is tested against a real Redis in test_admission_service.py.
+    What cannot be seen there is whether the chat path actually asks it to
+    wait: passing no wait leaves C1's refuse-on-sight behaviour in place and
+    every timing test still passes.
+    """
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        service, session = _service_session(db)
+        captured = {}
+
+        async def capture(*args, **kwargs):
+            captured.update(kwargs)
+            raise AdmissionRejected("global", "busy")
+
+        with patch.object(admission_service, "acquire_async", side_effect=capture):
+            with pytest.raises(HTTPException):
+                asyncio.run(anext(service.send_message(db, session.id, "hi")))
+
+        assert captured["wait_seconds"] == settings.chat_admission_wait_seconds
+        assert captured["wait_seconds"] > 0, "a wait of zero is C1, not C2"
+        # The per-user cap must still be the one checked first.
+        assert captured["per_user_limit"] == settings.chat_max_turns_per_user
+        assert captured["global_limit"] == settings.chat_max_concurrent_turns
 
 
 def test_telemetry_summarises_only_the_window_and_says_nothing_when_empty():

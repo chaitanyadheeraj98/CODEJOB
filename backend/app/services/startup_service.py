@@ -8,6 +8,7 @@ from collections.abc import Callable
 from app.gmail_client import is_gmail_configured
 from app.config import settings
 from app.runtime_state import runtime_state
+from app.services import leader_election
 from app.services.migration_runtime_service import MigrationRuntimeService
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,14 @@ class StartupService:
             # and background automation - TestClient triggers this on every test's first
             # request, and these have no timeout, so they'd hang or spam real services.
             return
-        if settings.feature_gmail_labeling_enabled and is_gmail_configured():
+        # Guarded by the same lease as the auto-runner: it is idempotent, but
+        # four processes doing it on every deploy is four times the Gmail calls
+        # against a quota that is already tight.
+        if (
+            settings.feature_gmail_labeling_enabled
+            and is_gmail_configured()
+            and leader_election.is_leader(leader_election.AUTO_RUNNER)
+        ):
             try:
                 runtime_state.gmail_labeling_service.ensure_target_labels()
             except Exception as exc:
@@ -60,6 +68,11 @@ class StartupService:
         runtime_state.auto_runner_thread.start()
 
     def shutdown(self) -> None:
+        # Handed back rather than left to expire, so the next process takes
+        # over immediately. Without this a rolling restart leaves a gap in
+        # automation as long as the lease TTL.
+        leader_election.release(leader_election.AUTO_RUNNER)
+        leader_election.release(leader_election.TELEGRAM_POLLER)
         runtime_state.auto_runner_stop_event.set()
         if runtime_state.auto_runner_thread and runtime_state.auto_runner_thread.is_alive():
             runtime_state.auto_runner_thread.join(timeout=5.0)

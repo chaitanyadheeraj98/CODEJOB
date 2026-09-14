@@ -29,12 +29,16 @@ from app.schemas import (
     ChatSessionRenameRequest,
     ChatSessionResponse,
     ChatStatusResponse,
+    OllamaCredentialRequest,
+    OllamaCredentialResponse,
     ProposalOutcomeRequest,
 )
 from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.chat_export_service import TRANSCRIPT_SPEC, download_name, transcript_markdown
 from app.services.resume_render_service import build_docx, build_pdf
 from app.services.chat_service import ChatService
+from app.services.provider_credential_service import get_credentials, require_credentials, save_credentials
+from app import tenancy
 
 
 logger = logging.getLogger(__name__)
@@ -60,13 +64,18 @@ def require_chat_actions_enabled() -> None:
         raise HTTPException(status_code=404, detail="Chat actions are disabled")
 
 
-async def _ollama_running() -> bool:
+async def _ollama_running(db: Session) -> bool:
     started = perf_counter()
     runtime_state.ollama_last_attempted_at = datetime.now(UTC)
     try:
+        credentials = require_credentials(db, tenancy.owner_id(), "ollama")
+        base_url = (credentials.base_url or settings.ollama_base_url).rstrip("/")
         timeout = max(0.25, min(settings.ollama_timeout_seconds, 3.0))
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
+            response = await client.get(
+                f"{base_url}/api/tags",
+                headers={"Authorization": f"Bearer {credentials.api_key}"},
+            )
             response.raise_for_status()
         runtime_state.ollama_last_error = None
         runtime_state.ollama_last_success_at = datetime.now(UTC)
@@ -78,12 +87,25 @@ async def _ollama_running() -> bool:
         runtime_state.ollama_last_duration_ms = max(0, int((perf_counter() - started) * 1000))
 
 
+def _ollama_credential_response(db: Session) -> OllamaCredentialResponse:
+    credentials = get_credentials(db, tenancy.owner_id(), "ollama")
+    if credentials is None:
+        return OllamaCredentialResponse(configured=False)
+    suffix = credentials.api_key[-4:] if len(credentials.api_key) > 4 else "****"
+    return OllamaCredentialResponse(
+        configured=True,
+        masked_api_key=f"sk-…{suffix}",
+        base_url=credentials.base_url,
+    )
+
+
 @router.get("/status", response_model=ChatStatusResponse)
 async def chat_status(
     db: Session = Depends(get_db),
     service: ChatService = Depends(get_chat_service),
 ) -> ChatStatusResponse:
-    running = await _ollama_running() if settings.feature_chat_enabled else False
+    running = await _ollama_running(db) if settings.feature_chat_enabled else False
+    credentials = _ollama_credential_response(db)
     # Read here rather than from a second endpoint: this is what the AI Access
     # card already fetches, and the summary belongs beside the health it explains.
     telemetry = service.telemetry_summary(db) if settings.feature_chat_enabled else None
@@ -91,6 +113,9 @@ async def chat_status(
         telemetry=telemetry,
         enabled=settings.feature_chat_enabled,
         ollama_running=running,
+        ollama_configured=credentials.configured,
+        ollama_masked_api_key=credentials.masked_api_key,
+        ollama_base_url=credentials.base_url,
         ollama_last_error=runtime_state.ollama_last_error,
         ollama_last_success_at=runtime_state.ollama_last_success_at,
         chat_last_error=runtime_state.chat_last_error,
@@ -99,6 +124,39 @@ async def chat_status(
         model=runtime_state.chat_active_model or settings.ollama_chat_model,
         available_models=selectable_models(),
     )
+
+
+@router.put("/credentials/ollama", response_model=OllamaCredentialResponse)
+async def update_ollama_credentials(
+    payload: OllamaCredentialRequest,
+    db: Session = Depends(get_db),
+) -> OllamaCredentialResponse:
+    base_url = (payload.base_url or settings.ollama_base_url).rstrip("/")
+    timeout = max(0.25, min(settings.ollama_timeout_seconds, 3.0))
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{base_url}/api/tags",
+                headers={"Authorization": f"Bearer {payload.api_key}"},
+            )
+            response.raise_for_status()
+            body = response.json()
+            if not isinstance(body, dict) or not isinstance(body.get("models"), list):
+                raise ValueError("invalid Ollama tags response")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=400, detail="Ollama rejected that API key or base URL.") from exc
+    except (httpx.RequestError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Ollama did not return a model list from that base URL.") from exc
+
+    save_credentials(
+        db,
+        tenancy.owner_id(),
+        "ollama",
+        payload.api_key,
+        base_url=payload.base_url,
+    )
+    db.commit()
+    return _ollama_credential_response(db)
 
 
 @router.post(

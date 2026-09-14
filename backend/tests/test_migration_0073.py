@@ -28,7 +28,13 @@ def test_chat_turn_migration_fresh_repeat_and_schema(tmp_path, monkeypatch):
         with engine.begin() as connection:
             migration.op = Operations(MigrationContext.configure(connection))
             migration.upgrade()
-            assert {tuple(i["column_names"]) for i in sa.inspect(connection).get_indexes("chat_turn")} == {("session_id",), ("created_at",)}
+            indexes = {tuple(i["column_names"]) for i in sa.inspect(connection).get_indexes("chat_turn")}
+            # A subset, not equality. What this asserts is that replaying 0073
+            # neither loses nor duplicates *its own* indexes; the database is at
+            # head, so later migrations legitimately add more - 0080 adds
+            # owner_id. Equality here would mean "no migration may ever index
+            # this table again", which is not what the replay check is for.
+            assert {("session_id",), ("created_at",)} <= indexes
         assert compare(url) == []
     finally:
         engine.dispose()

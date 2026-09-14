@@ -19,6 +19,7 @@ from app.services import (
     field_coverage,
     resume_tracking_service,
 )
+from app import tenancy
 
 # The same range vocabulary the dashboard's own selector uses. Sharing
 # range_bounds is deliberate: a metric card and the Run Queue page must not
@@ -35,10 +36,10 @@ def _bounds(range_key: str) -> tuple[datetime, datetime]:
 
 def _pipeline_summary(db, range_key: str, days: int) -> dict[str, object]:
     start, end = _bounds(range_key)
-    summary = application_service.dashboard_summary(db, settings.owner_id)
+    summary = application_service.dashboard_summary(db, tenancy.owner_id())
     total = int(
         db.query(func.count(Application.id))
-        .filter(Application.owner_id == settings.owner_id, Application.deleted_at.is_(None))
+        .filter(Application.owner_id == tenancy.owner_id(), Application.deleted_at.is_(None))
         .scalar()
         or 0
     )
@@ -73,7 +74,7 @@ def _candidate_queue(db, range_key: str, days: int) -> dict[str, object]:
     rows = (
         db.query(RecruiterEmail.state, func.count(RecruiterEmail.id))
         .filter(
-            RecruiterEmail.owner_id == settings.owner_id,
+            RecruiterEmail.owner_id == tenancy.owner_id(),
             RecruiterEmail.created_at >= start,
             RecruiterEmail.created_at <= end,
         )
@@ -122,7 +123,7 @@ def _candidate_queue(db, range_key: str, days: int) -> dict[str, object]:
 def _stale_applications(db, range_key: str, days: int) -> dict[str, object]:
     cutoff = datetime.now(UTC) - timedelta(days=days)
     open_only = (
-        Application.owner_id == settings.owner_id,
+        Application.owner_id == tenancy.owner_id(),
         Application.deleted_at.is_(None),
         Application.status.not_in(APPLICATION_CLOSED_STATUS_VALUES),
     )
@@ -166,7 +167,7 @@ def _stale_applications(db, range_key: str, days: int) -> dict[str, object]:
 
 def _resume_performance(db, range_key: str, days: int) -> dict[str, object]:
     rows = resume_tracking_service.resume_performance_summary(
-        db, owner_id=settings.owner_id, sort="acceptance_desc", combined=True
+        db, owner_id=tenancy.owner_id(), sort="acceptance_desc", combined=True
     )
     cards = [
         {

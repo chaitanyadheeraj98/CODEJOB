@@ -11,12 +11,23 @@ dependencies = [
     # computation. Declared so an rq upgrade that drops or replaces it fails
     # resolution instead of silently breaking every schedule in the product.
     "croniter>=6.2.2",
+    # Already present transitively via google-auth, and now used directly to
+    # encrypt stored Gmail refresh tokens. Declared for the same reason
+    # croniter is: a transitive upgrade that drops it must fail resolution
+    # rather than break credential storage at runtime.
+    "cryptography>=44.0.0",
     "fastapi>=0.136.1",
     "google-api-python-client>=2.181.0",
     "google-auth-oauthlib>=1.2.2",
+    # Consumed only by the dedicated subscriber process. Worth a direct
+    # dependency rather than REST calls: StreamingPull, ack-deadline extension,
+    # flow control and reconnect are the parts of a pull subscription that are
+    # tedious to get right and silently wrong when they are not.
+    "google-cloud-pubsub>=2.31.0",
     "httpx>=0.28.1",
     "lxml>=6.0.2",
     "openai>=2.33.0",
+    "pillow>=12.3.0",
     "python-multipart>=0.0.20",
     "pydantic-settings>=2.14.0",
     "redis>=7.4.0",

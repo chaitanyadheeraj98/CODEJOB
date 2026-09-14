@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.models import RecruiterWatch, TrackedThread, UserSettings
+from app.models import AppTSApplication, RecruiterWatch, TrackedThread, UserSettings
 from app.services import label_tracking_service as service
 
 
@@ -28,7 +28,11 @@ def db():
 
 
 def _settings(db, employer_domains=""):
-    db.add(UserSettings(owner_id="a", employer_domains=employer_domains))
+    db.add(UserSettings(
+        owner_id="a",
+        employer_domains=employer_domains,
+        feature_application_watches_enabled=True,
+    ))
     db.flush()
 
 
@@ -93,3 +97,27 @@ def test_adding_an_employer_domain_releases_the_watches_it_already_made(db):
     assert released == 2, "the employer address and domain, and nothing else"
     live = {w.value for w in db.query(RecruiterWatch).filter(RecruiterWatch.released_at.is_(None))}
     assert live == {"naman@valzosoft.com", "valzosoft.com"}
+
+
+def test_watch_with_both_sources_survives_losing_the_thread(db):
+    _settings(db)
+    thread = _thread(db)
+    application = AppTSApplication(
+        owner_id="a", resume_asset_id=1, resume_version_snapshot=1,
+        resume_file_name_snapshot="resume.pdf", resume_sha256_snapshot="sha",
+    )
+    db.add(application)
+    db.flush()
+    watch = RecruiterWatch(
+        owner_id="a", watch_type="address", value="naman@valzosoft.com",
+        source_thread_ids_json=json.dumps([thread.external_thread_id]),
+        source_application_ids_json=json.dumps([application.id]),
+    )
+    db.add(watch)
+    db.flush()
+
+    thread.untracked_at = service.datetime.now(service.UTC)
+    assert service.reconcile_watches(db, "a") == 0
+    assert json.loads(watch.source_thread_ids_json) == []
+    assert json.loads(watch.source_application_ids_json) == [application.id]
+    assert watch.released_at is None

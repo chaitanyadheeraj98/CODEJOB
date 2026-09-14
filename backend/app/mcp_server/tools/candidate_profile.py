@@ -34,6 +34,7 @@ from app.services.candidate_profile_service import (
     plan_append,
 )
 from app.services.chat_provenance import contains_verbatim, latest_exchange
+from app import tenancy
 
 OPERATIONS = ("append", "replace", "delete")
 
@@ -89,7 +90,7 @@ _EMPTY_PROFILE = {
 def _profile_and_settings(db) -> str:
     row = (
         db.query(UserSettings.candidate_profile_markdown)
-        .filter(UserSettings.owner_id == settings.owner_id)
+        .filter(UserSettings.owner_id == tenancy.owner_id())
         .first()
     )
     return (row[0] if row else "") or ""
@@ -168,7 +169,7 @@ def _propose_append(field: str, value: str, verbatim: bool, user_asked: bool) ->
         existing = _profile_and_settings(db)
         if not existing.strip():
             return dict(_EMPTY_PROFILE)
-        evidence = latest_exchange(db, settings.owner_id)
+        evidence = latest_exchange(db, tenancy.owner_id())
     finally:
         db.close()
 
@@ -271,7 +272,7 @@ def _propose_replace(attachment_id: int) -> dict[str, object]:
         row = (
             db.query(ChatAttachment)
             .filter(
-                ChatAttachment.owner_id == settings.owner_id,
+                ChatAttachment.owner_id == tenancy.owner_id(),
                 ChatAttachment.id == attachment_id,
             )
             .first()

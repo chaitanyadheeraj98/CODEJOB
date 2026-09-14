@@ -149,7 +149,9 @@ class OrchestrationService:
         self.deps = deps
 
     def _sync_label_tracking(self, db: Session, user_settings: UserSettings) -> tuple[int, int, int]:
-        if not (app_settings.feature_label_tracking_enabled and user_settings.feature_label_tracking_enabled):
+        labels_enabled = bool(app_settings.feature_label_tracking_enabled and user_settings.feature_label_tracking_enabled)
+        watches_enabled = bool(labels_enabled or user_settings.feature_application_watches_enabled)
+        if not watches_enabled:
             return 0, 0, 0
         from types import SimpleNamespace
         from app import gmail_client
@@ -162,13 +164,15 @@ class OrchestrationService:
         owner_email = user_settings.signature_email or DEFAULT_SIGNATURE_EMAIL
         messages = threads = 0
         errors = 0
-        for index, step in enumerate((
+        steps = ([
             lambda: self.sync_gmail_labels(db),
             lambda: label_tracking_service.reconcile_untracked(db, self.deps.owner_id, deps=deps),
             lambda: label_tracking_service.sync_tracked_labels(db, self.deps.owner_id, deps=deps, owner_email=owner_email),
+        ] if labels_enabled else []) + [
             lambda: label_tracking_service.sync_watch_matches(db, self.deps.owner_id, deps=deps, owner_email=owner_email, max_messages=max(0, app_settings.label_tracking_max_messages_per_sync - messages)),
-        )):
-            if index == 3 and errors:
+        ]
+        for index, step in enumerate(steps):
+            if labels_enabled and index == 3 and errors:
                 continue
             try:
                 with db.begin_nested():
@@ -307,6 +311,19 @@ class OrchestrationService:
         exists for an edge case; the full sync still runs it. This is meant as a
         cheap "worth checking" signal, not a replacement for the real scan.
         """
+        if not self._scans_are_scheduled():
+            # Push delivery already wrote what this was asking Gmail for, once
+            # a minute, forever. The stored count is both cheaper and more
+            # accurate: it includes the rfc-message-id path the Gmail query
+            # above admits it misses.
+            # `coalesce` rather than a Python `or 0` after the fact: SUM over
+            # no rows is NULL, and one mechanism for that is testable where two
+            # overlapping ones quietly cover for each other.
+            return int(
+                db.query(func.coalesce(func.sum(EmailConversation.unread_reply_count), 0))
+                .filter(EmailConversation.owner_id == self.deps.owner_id)
+                .scalar()
+            )
         if self.deps.list_unread_thread_ids is None:
             return 0
         sent_thread_ids = self._sent_thread_ids(db)
@@ -440,6 +457,40 @@ class OrchestrationService:
 
         return matched_count, created_count
 
+    def _scans_are_scheduled(self) -> bool:
+        """Whether the recurring Gmail scans should still run.
+
+        False once push delivery is on, because then every change arrives as a
+        notification and a scan is a second, slower, more expensive source of
+        the same rows. Checked at the call sites rather than inside the scans
+        themselves, so that `reconcile_inbox_once` can still reach them - first
+        registration and stale-cursor recovery need exactly the behaviour
+        everything else is giving up.
+        """
+        from app.services import gmail_pubsub_service
+
+        return not gmail_pubsub_service.push_delivery_active()
+
+    def reconcile_inbox_once(self, db: Session, user_settings: UserSettings) -> tuple[int, int, int]:
+        """Run the bounded Inbox and label scans deliberately, once.
+
+        The public door to `_capture_inbound_replies` and `_sync_label_tracking`
+        for push delivery, which has exactly two reasons to want them: the first
+        watch registration, and recovery from a history cursor Gmail has aged
+        out. Both are the same situation - a gap that no notification will ever
+        describe, because the notifications for it were either never sent or
+        long since acknowledged.
+
+        Named rather than reached through the private methods so that Phase D's
+        "these no longer run on a schedule" is a statement about call sites that
+        can be checked, instead of a convention.
+
+        Returns (matched_replies, created_replies, label_errors).
+        """
+        matched, created = self._capture_inbound_replies(db, user_settings)
+        _, _, errors = self._sync_label_tracking(db, user_settings)
+        return matched, created, errors
+
     def _detect_role_manifest_if_enabled(self, user_settings: UserSettings, body: str) -> RoleManifestResult | None:
         if not user_settings.feature_role_manifest_enabled:
             return None
@@ -511,8 +562,10 @@ class OrchestrationService:
             threshold = self.deps.policy_threshold(user_settings, effective_policy)
             trusted_groups = self._load_enabled_requirement_groups(db) if user_settings.feature_gmail_requirement_groups_enabled else []
             candidates = self.deps.list_unread_candidates_by_query(effective_query)
-            reply_matched_count, reply_created_count = self._capture_inbound_replies(db, user_settings)
-            self._sync_label_tracking(db, user_settings)
+            reply_matched_count = reply_created_count = 0
+            if self._scans_are_scheduled():
+                reply_matched_count, reply_created_count = self._capture_inbound_replies(db, user_settings)
+                self._sync_label_tracking(db, user_settings)
             imported_count += reply_created_count
             skipped_count += reply_matched_count - reply_created_count
             processed_items = 0
@@ -1155,11 +1208,12 @@ class OrchestrationService:
             return response
 
         user_settings = self.deps.get_settings(db)
-        try:
-            self._capture_inbound_replies(db, user_settings)
-        except Exception:
-            logger.exception("reply_capture_failed_during_automation_run")
-        self._sync_label_tracking(db, user_settings)
+        if self._scans_are_scheduled():
+            try:
+                self._capture_inbound_replies(db, user_settings)
+            except Exception:
+                logger.exception("reply_capture_failed_during_automation_run")
+            self._sync_label_tracking(db, user_settings)
 
         resume = self.deps.active_resume(db)
         if not resume:
@@ -1809,13 +1863,19 @@ class OrchestrationService:
         # answers this account's reply scan with 403 rateLimitExceeded often
         # enough that the label half never ran at all.
         reply_error: Exception | None = None
-        try:
-            self._capture_inbound_replies(db, user_settings)
-        except Exception as exc:
-            db.rollback()
-            reply_error = exc
-            logger.exception("reply_capture_failed_during_inbox_refresh")
-        self._sync_label_tracking(db, user_settings)
+        # Under push delivery this becomes what its name always claimed: a
+        # refresh. The rows are already arriving on their own, so the icon
+        # rereads them instead of standing in for delivery - which also means
+        # it can no longer fail with a Gmail rate limit, the failure that made
+        # the guard below necessary in the first place.
+        if self._scans_are_scheduled():
+            try:
+                self._capture_inbound_replies(db, user_settings)
+            except Exception as exc:
+                db.rollback()
+                reply_error = exc
+                logger.exception("reply_capture_failed_during_inbox_refresh")
+            self._sync_label_tracking(db, user_settings)
         # Raised after label tracking, never instead of it: the labeled threads
         # are captured and committed by the time this fires, so the retry the
         # user makes is only for the half that actually failed. Silence here is

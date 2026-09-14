@@ -35,12 +35,12 @@ class EmailTrackingInboxTests(unittest.TestCase):
                 db.close()
 
         main.app.dependency_overrides[main.get_db] = override_get_db
-        main.orchestration_service = None
+        main.reset_owner_scoped_services()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
         main.app.dependency_overrides.clear()
-        main.orchestration_service = None
+        main.reset_owner_scoped_services()
         Base.metadata.drop_all(bind=self.engine)
         self.engine.dispose()
 
@@ -249,7 +249,7 @@ class EmailTrackingInboxTests(unittest.TestCase):
             # Reply is matched via the unread-search + in_reply_to_header path above, not the
             # per-thread rescan - this stubs that second scan path out so it doesn't reach Gmail.
             main.list_thread_messages = lambda thread_id: []
-            main.orchestration_service = None
+            main.reset_owner_scoped_services()
             response = self.client.post("/gmail/sync")
         finally:
             (
@@ -259,7 +259,7 @@ class EmailTrackingInboxTests(unittest.TestCase):
                 main.mark_reply_processed,
                 main.list_thread_messages,
             ) = originals
-            main.orchestration_service = None
+            main.reset_owner_scoped_services()
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["imported_count"], 2)
@@ -332,7 +332,7 @@ class EmailTrackingInboxTests(unittest.TestCase):
             main.list_unread_candidates_by_query = lambda query, **_kwargs: []
             main.list_thread_messages = lambda thread_id: [self_sent_item] if thread_id == "thread-123" else []
             main.mark_reply_processed = lambda message_id, _labels=None: None
-            main.orchestration_service = None
+            main.reset_owner_scoped_services()
             response = self.client.post("/inbox/conversations/refresh")
         finally:
             (
@@ -341,7 +341,7 @@ class EmailTrackingInboxTests(unittest.TestCase):
                 main.list_thread_messages,
                 main.mark_reply_processed,
             ) = originals
-            main.orchestration_service = None
+            main.reset_owner_scoped_services()
 
         self.assertEqual(response.status_code, 200, response.text)
         with Session(self.engine) as db:

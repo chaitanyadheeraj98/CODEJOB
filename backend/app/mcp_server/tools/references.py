@@ -5,6 +5,7 @@ import difflib
 from app.config import settings
 from app.db import SessionLocal
 from app.models import PremiumNumberContact, RecruiterEmail, RecruiterOpportunity
+from app import tenancy
 
 MAX_OPTIONS = 10
 FUZZY_CUTOFF = 0.6
@@ -20,7 +21,7 @@ SEARCHED_FIELDS = {
 
 def _contacts(db) -> list[dict[str, object]]:
     rows = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.deleted_at.is_(None),
     ).all()
     return [
@@ -41,7 +42,7 @@ def _contacts(db) -> list[dict[str, object]]:
 
 def _opportunities(db) -> list[dict[str, object]]:
     rows = db.query(RecruiterOpportunity).filter(
-        RecruiterOpportunity.owner_id == settings.owner_id,
+        RecruiterOpportunity.owner_id == tenancy.owner_id(),
     ).all()
     return [
         {
@@ -58,7 +59,7 @@ def _opportunities(db) -> list[dict[str, object]]:
 
 
 def _candidates(db) -> list[dict[str, object]]:
-    rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id).all()
+    rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == tenancy.owner_id()).all()
     return [
         {
             "id": row.id,

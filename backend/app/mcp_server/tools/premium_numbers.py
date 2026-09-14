@@ -47,6 +47,7 @@ from app.premium_numbers.domain_guard import (
     is_hidden_invalid_employer_number,
     is_hidden_nvoids_placeholder_recruiter,
 )
+from app import tenancy
 
 _VALID_CATEGORIES = ("recruiter", "employer", "review", "lead")
 
@@ -71,7 +72,7 @@ def _source_reference_payload(db, reference: OpportunitySourceReference) -> dict
     if reference.source_type == "gmail":
         row = (
             db.query(RecruiterEmail)
-            .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == row_id)
+            .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == row_id)
             .first()
         )
         if row is None:
@@ -90,7 +91,7 @@ def _source_reference_payload(db, reference: OpportunitySourceReference) -> dict
         return base
     row = (
         db.query(ExternalOpportunity)
-        .filter(ExternalOpportunity.owner_id == settings.owner_id, ExternalOpportunity.id == row_id)
+        .filter(ExternalOpportunity.owner_id == tenancy.owner_id(), ExternalOpportunity.id == row_id)
         .first()
     )
     if row is None:
@@ -136,7 +137,7 @@ def propose_create_premium_contact(
         duplicate = (
             db.query(PremiumNumberContact)
             .filter(
-                PremiumNumberContact.owner_id == settings.owner_id,
+                PremiumNumberContact.owner_id == tenancy.owner_id(),
                 PremiumNumberContact.normalized_phone_number == normalized_phone,
             )
             .first()
@@ -161,7 +162,7 @@ def propose_create_premium_contact(
 
 def _recruiter_rows(db, email_id: int, recruiter_email_hint: str, name_search: str) -> list[dict[str, object]]:
     query = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.is_recruiter.is_(True),
         PremiumNumberContact.deleted_at.is_(None),
     )
@@ -204,7 +205,7 @@ def _recruiter_rows(db, email_id: int, recruiter_email_hint: str, name_search: s
 
 def _employer_rows(db, email_id: int, _recruiter_email_hint: str, name_search: str) -> list[dict[str, object]]:
     query = db.query(PremiumNumberContact).filter(
-        PremiumNumberContact.owner_id == settings.owner_id,
+        PremiumNumberContact.owner_id == tenancy.owner_id(),
         PremiumNumberContact.is_employer.is_(True),
         PremiumNumberContact.deleted_at.is_(None),
     )
@@ -234,7 +235,7 @@ def _employer_rows(db, email_id: int, _recruiter_email_hint: str, name_search: s
 
 def _review_rows(db, email_id: int, _recruiter_email_hint: str, name_search: str) -> list[dict[str, object]]:
     query = db.query(NumberReviewQueue).filter(
-        NumberReviewQueue.owner_id == settings.owner_id, NumberReviewQueue.state == "pending"
+        NumberReviewQueue.owner_id == tenancy.owner_id(), NumberReviewQueue.state == "pending"
     )
     if email_id:
         query = query.filter(NumberReviewQueue.source_email_id == email_id)
@@ -261,7 +262,7 @@ def _review_rows(db, email_id: int, _recruiter_email_hint: str, name_search: str
 
 
 def _lead_rows(db, email_id: int, _recruiter_email_hint: str, name_search: str) -> list[dict[str, object]]:
-    query = db.query(PremiumNumberLead).filter(PremiumNumberLead.owner_id == settings.owner_id)
+    query = db.query(PremiumNumberLead).filter(PremiumNumberLead.owner_id == tenancy.owner_id())
     if email_id:
         query = query.filter(PremiumNumberLead.recruiter_email_id == email_id)
     else:
@@ -323,7 +324,7 @@ def list_contact_numbers(category: str = "", email_id: int = 0, name: str = "", 
         if email_id:
             root = (
                 db.query(RecruiterEmail)
-                .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+                .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == email_id)
                 .first()
             )
             if root is not None:
@@ -369,7 +370,7 @@ def _contact_evidence_block(db) -> dict[str, object]:
     """Coverage, refusals and alias warnings that travel with contact rows."""
     block: dict[str, object] = {
         "field_coverage": field_coverage.contact_coverage_for(
-            db, _CONTACT_REPORTED_FIELDS, owner_id=settings.owner_id
+            db, _CONTACT_REPORTED_FIELDS, owner_id=tenancy.owner_id()
         ),
         "population": field_coverage.SCOPE_ACTIVE,
         "coverage_note": (
@@ -395,7 +396,7 @@ def _contact_evidence_block(db) -> dict[str, object]:
             field_coverage.unconfirmed_alias_note(
                 db,
                 name,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 policies=field_coverage.CONTACT_FIELDS,
                 model=PremiumNumberContact,
                 active_only=True,
@@ -430,7 +431,7 @@ def rank_recruiters(rule: str = "volume", limit: int = 10, include_deleted: bool
         try:
             result = recruiter_ranking.rank_recruiters(
                 db,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 rule=rule,
                 limit=limit,
                 scope=(
@@ -445,7 +446,7 @@ def rank_recruiters(rule: str = "volume", limit: int = 10, include_deleted: bool
             field_coverage.SCOPE_ALL_TIME if include_deleted else field_coverage.SCOPE_ACTIVE
         )
         result["field_coverage"] = field_coverage.contact_coverage_for(
-            db, ["company", "designation", "recruiter_email"], owner_id=settings.owner_id, scope=scope
+            db, ["company", "designation", "recruiter_email"], owner_id=tenancy.owner_id(), scope=scope
         )
         # Replies are the sparse signal in this ranking. Reported so an absence is
         # read as "no reply recorded" rather than "this recruiter never answers".
@@ -499,7 +500,7 @@ def search_opportunities(
     try:
         result = opportunity_search.search(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             filters=opportunity_search.SearchFilters(
                 work_mode=work_mode, location=location, domain=domain,
                 status=status, query=query, days=int(days or 0),
@@ -510,7 +511,7 @@ def search_opportunities(
             return result
         result["field_coverage"] = field_coverage.coverage_for(
             db, ["work_mode", "location", "domain", "job_title", "extracted_skills"],
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
         )
         result["coverage_note"] = (
             "Percentages are corpus-wide over all opportunities, not over these "
@@ -558,13 +559,13 @@ def search_end_client(company: str, limit: int = 15, mode: str = "composed") -> 
     db = SessionLocal()
     try:
         result = end_client_search.search(
-            db, company, owner_id=settings.owner_id, limit=limit
+            db, company, owner_id=tenancy.owner_id(), limit=limit
         )
         if "error" in result:
             return result
         user_settings = (
-            db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
-            or UserSettings(owner_id=settings.owner_id)
+            db.query(UserSettings).filter(UserSettings.owner_id == tenancy.owner_id()).first()
+            or UserSettings(owner_id=tenancy.owner_id())
         )
         composed = mode == external_feeds.QUERY_MODE_COMPOSED
         result["nvoids_query"] = external_feeds.compose_nvoids_query(
@@ -622,8 +623,8 @@ def propose_nvoids_search(
     db = SessionLocal()
     try:
         user_settings = (
-            db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
-            or UserSettings(owner_id=settings.owner_id)
+            db.query(UserSettings).filter(UserSettings.owner_id == tenancy.owner_id()).first()
+            or UserSettings(owner_id=tenancy.owner_id())
         )
         composed = mode == external_feeds.QUERY_MODE_COMPOSED
         criteria = nvoids_search_job.SearchCriteria(
@@ -638,7 +639,7 @@ def propose_nvoids_search(
             batch_limit=max(1, min(int(batch_limit or 10), 50)),
         )
         already = end_client_search.search(
-            db, company, owner_id=settings.owner_id, limit=1
+            db, company, owner_id=tenancy.owner_id(), limit=1
         )
         return {
             "action": "propose_nvoids_search",
@@ -681,7 +682,7 @@ def check_nvoids_search(run_key: str = "") -> dict[str, object]:
         query = (
             db.query(RecentRun)
             .filter(
-                RecentRun.owner_id == settings.owner_id,
+                RecentRun.owner_id == tenancy.owner_id(),
                 RecentRun.run_key.like(f"{NVOIDS_CLIENT_SEARCH_PREFIX}%"),
             )
             .order_by(RecentRun.created_at.desc())
@@ -727,7 +728,7 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
     """
     db = SessionLocal()
     try:
-        query = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.owner_id == settings.owner_id)
+        query = db.query(RecruiterOpportunity).filter(RecruiterOpportunity.owner_id == tenancy.owner_id())
         if status:
             if status not in OPPORTUNITY_STATUS_VALUES:
                 return {
@@ -754,7 +755,7 @@ def list_recruiter_opportunities(status: str = "", source_email_id: int = 0, lim
             {
                 row.id: row
                 for row in db.query(PremiumNumberContact).filter(
-                    PremiumNumberContact.owner_id == settings.owner_id,
+                    PremiumNumberContact.owner_id == tenancy.owner_id(),
                     PremiumNumberContact.id.in_(recruiter_ids),
                     PremiumNumberContact.is_recruiter.is_(True),
                     PremiumNumberContact.deleted_at.is_(None),
@@ -837,7 +838,7 @@ def _opportunity_evidence_block(db, rows: list) -> dict[str, object]:
     """
     block: dict[str, object] = {
         "field_coverage": field_coverage.coverage_for(
-            db, _REPORTED_FIELDS, owner_id=settings.owner_id
+            db, _REPORTED_FIELDS, owner_id=tenancy.owner_id()
         ),
         "coverage_note": (
             "Percentages are corpus-wide over all opportunities, not over these "
@@ -867,7 +868,7 @@ def _opportunity_evidence_block(db, rows: list) -> dict[str, object]:
     aliases = [
         note
         for note in (
-            field_coverage.unconfirmed_alias_note(db, name, owner_id=settings.owner_id)
+            field_coverage.unconfirmed_alias_note(db, name, owner_id=tenancy.owner_id())
             for name in _REPORTED_FIELDS
         )
         if note is not None
@@ -905,7 +906,7 @@ def _lineage_opportunity_payload(db, row: RecruiterOpportunity | None) -> dict[s
     contact = (
         db.query(PremiumNumberContact)
         .filter(
-            PremiumNumberContact.owner_id == settings.owner_id,
+            PremiumNumberContact.owner_id == tenancy.owner_id(),
             PremiumNumberContact.id == row.recruiter_number_id,
             PremiumNumberContact.deleted_at.is_(None),
         )
@@ -965,7 +966,7 @@ def _lineage_application_payload(
     rtr_history = (
         db.query(models.rtr_cls)
         .filter(
-            models.rtr_cls.owner_id == settings.owner_id,
+            models.rtr_cls.owner_id == tenancy.owner_id(),
             models.rtr_cls.application_id == row.id,
         )
         .order_by(models.rtr_cls.requested_at.desc(), models.rtr_cls.id.desc())
@@ -974,7 +975,7 @@ def _lineage_application_payload(
     interviews = (
         db.query(models.interview_cls)
         .filter(
-            models.interview_cls.owner_id == settings.owner_id,
+            models.interview_cls.owner_id == tenancy.owner_id(),
             models.interview_cls.application_id == row.id,
             models.interview_cls.deleted_at.is_(None),
         )
@@ -984,7 +985,7 @@ def _lineage_application_payload(
     suggestions = (
         db.query(models.suggestion_cls)
         .filter(
-            models.suggestion_cls.owner_id == settings.owner_id,
+            models.suggestion_cls.owner_id == tenancy.owner_id(),
             models.suggestion_cls.application_id == row.id,
         )
         .order_by(models.suggestion_cls.created_at.desc(), models.suggestion_cls.id.desc())
@@ -1013,7 +1014,7 @@ def _lineage_application_payload(
             "performance_scope": "owner-wide across every submission using this resume",
             "performance": resume_tracking_service.combined_resume_funnel_metrics(
                 db,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 resume_asset_id=row.resume_asset_id,
             ),
         },
@@ -1072,7 +1073,7 @@ def _record_application_payloads(
         row
         for row in opportunity_lineage_service.applications_for_record(
             db,
-            owner_id=settings.owner_id,
+            owner_id=tenancy.owner_id(),
             record_id=record_id,
             model=Application,
         )
@@ -1080,7 +1081,7 @@ def _record_application_payloads(
     ]
     current = opportunity_lineage_service.applications_for_record(
         db,
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         record_id=record_id,
         model=appts_service.APPTS_MODELS.application_cls,
     )
@@ -1089,7 +1090,7 @@ def _record_application_payloads(
         legacy.extend(
             row
             for row in db.query(Application).filter(
-                Application.owner_id == settings.owner_id,
+                Application.owner_id == tenancy.owner_id(),
                 Application.recruiter_opportunity_id == historical_opportunity_id,
                 Application.deleted_at.is_(None),
                 Application.promoted_to_appts_application_id.is_(None),
@@ -1100,7 +1101,7 @@ def _record_application_payloads(
         current.extend(
             row
             for row in db.query(appts_service.APPTS_MODELS.application_cls).filter(
-                appts_service.APPTS_MODELS.application_cls.owner_id == settings.owner_id,
+                appts_service.APPTS_MODELS.application_cls.owner_id == tenancy.owner_id(),
                 appts_service.APPTS_MODELS.application_cls.recruiter_opportunity_id == historical_opportunity_id,
                 appts_service.APPTS_MODELS.application_cls.deleted_at.is_(None),
             ).all()
@@ -1248,14 +1249,14 @@ def _lineage_detail_payload(
     references = (
         db.query(OpportunitySourceReference)
         .filter(
-            OpportunitySourceReference.owner_id == settings.owner_id,
+            OpportunitySourceReference.owner_id == tenancy.owner_id(),
             OpportunitySourceReference.lineage_id == lineage.id,
         )
         .order_by(OpportunitySourceReference.first_seen_at.asc(), OpportunitySourceReference.id.asc())
         .all()
     )
     event_query = db.query(OpportunityLifecycleEvent).filter(
-        OpportunityLifecycleEvent.owner_id == settings.owner_id,
+        OpportunityLifecycleEvent.owner_id == tenancy.owner_id(),
         OpportunityLifecycleEvent.lineage_id == lineage.id,
     )
     tracked_opportunity_id = lineage.recruiter_opportunity_id
@@ -1288,7 +1289,7 @@ def _lineage_detail_payload(
         opportunity = (
             db.query(RecruiterOpportunity)
             .filter(
-                RecruiterOpportunity.owner_id == settings.owner_id,
+                RecruiterOpportunity.owner_id == tenancy.owner_id(),
                 RecruiterOpportunity.id == tracked_opportunity_id,
             )
             .first()
@@ -1330,11 +1331,11 @@ def get_record_details(record_id: str, event_limit: int = 50) -> dict[str, objec
     """
     db = SessionLocal()
     try:
-        record = opportunity_lineage_service.get_record(db, owner_id=settings.owner_id, record_id=record_id)
+        record = opportunity_lineage_service.get_record(db, owner_id=tenancy.owner_id(), record_id=record_id)
         if record is None:
             return {"error": "Record not found"}
         candidate = _candidate_summary(db, record)
-        email_activity = _email_activity(db, owner_id=settings.owner_id, record_id=record.id)
+        email_activity = _email_activity(db, owner_id=tenancy.owner_id(), record_id=record.id)
         lineage = (
             db.query(OpportunityLineage).filter(OpportunityLineage.id == record.internal_lineage_id).first()
             if record.internal_lineage_id
@@ -1349,7 +1350,7 @@ def get_record_details(record_id: str, event_limit: int = 50) -> dict[str, objec
             "applications": _record_application_payloads(db, record_id=record.id),
             "outcomes": opportunity_lineage_service.record_outcomes(
                 db,
-                owner_id=settings.owner_id,
+                owner_id=tenancy.owner_id(),
                 record_id=record.id,
             ),
         }

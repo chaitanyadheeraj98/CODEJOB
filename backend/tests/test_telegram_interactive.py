@@ -8,9 +8,11 @@ from sqlalchemy.orm import sessionmaker
 os.environ["DEBUG"] = "false"
 
 from app import main
+from app.config import settings
 from app.db import Base
-from app.models import RecruiterEmail, UserSettings
+from app.models import RecruiterEmail, User, UserSettings
 from app.schemas import AIStatusResponse, AutomationRunResponse, EmailResponse
+from app.services.telegram_format import plain_text
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.telegram_bot import TelegramBotService, TelegramReply
 
@@ -52,6 +54,24 @@ class TelegramInteractiveMainTests(unittest.TestCase):
 
 
 class TelegramBotServiceCallbackTests(unittest.TestCase):
+    def test_plain_reply_escapes_telegram_html_characters(self) -> None:
+        sent: list[dict] = []
+        service = TelegramBotService(
+            token="x",
+            alerts_enabled=True,
+            is_authorized=lambda _chat_id, _text: True,
+            chat_ids_for_owner=lambda _owner_id: [],
+            authorized_chat_count=lambda: 1,
+            command_handler=lambda _chat_id, _user_id, _username, _text: "Subject: <script> &",
+            callback_handler=lambda _chat_id, _user_id, _username, _data, _message_id: "ok",
+        )
+        service.transport._post_json = lambda _method, payload: sent.append(payload) or {"ok": True}
+
+        service._handle_update({"message": {"text": "/review", "chat": {"id": 999}, "from": {"id": 1}}})
+
+        self.assertEqual(sent[0]["parse_mode"], "HTML")
+        self.assertEqual(sent[0]["text"], "Subject: &lt;script&gt; &amp;")
+
     def test_callback_update_is_processed(self) -> None:
         sent: list[tuple[str, dict]] = []
         callback_calls: list[str] = []
@@ -71,12 +91,14 @@ class TelegramBotServiceCallbackTests(unittest.TestCase):
 
         service = TelegramBotService(
             token="x",
-            allowed_chat_ids={999},
             alerts_enabled=True,
+            is_authorized=lambda chat_id, _text: chat_id == 999,
+            chat_ids_for_owner=lambda _owner_id: [999],
+            authorized_chat_count=lambda: 1,
             command_handler=command_handler,
             callback_handler=callback_handler,
         )
-        service._post_json = fake_post  # type: ignore[method-assign]
+        service.transport._post_json = fake_post  # type: ignore[method-assign]
         update = {
             "callback_query": {
                 "id": "cb1",
@@ -136,9 +158,10 @@ class TelegramReviewCommandTests(unittest.TestCase):
             get_candidate_review=lambda email_id, db: main._get_candidate_review(email_id, db),
             approve_and_send=lambda _email_id, _payload, _db: None,
             reject_candidate=lambda _email_id, _payload, _db: None,
-            owner_id="default-owner",
+            resolve_owner=lambda _chat_id: "default-owner",
+            redeem_link_code=lambda _code, _chat_id, _user_id, _username: None,
             action_lock=main.telegram_action_lock,
-            action_pin=lambda: "",
+            verify_action_pin=lambda _owner_id, _pin: True,
             auth_ttl_minutes=lambda: 30,
         )
 
@@ -188,8 +211,8 @@ class TelegramReviewCommandTests(unittest.TestCase):
         row = self._add_candidate(draft_ai_error="fallback used", last_error="sheet warning")
         reply = self.runtime.handle_command(123, "u1", "tester", f"/review {row.id}")
 
-        self.assertIsInstance(reply, str)
-        text = str(reply)
+        self.assertIsInstance(reply, TelegramReply)
+        text = plain_text(reply.text) if isinstance(reply, TelegramReply) else ""
         self.assertIn(f"Email ID: {row.id}", text)
         self.assertIn(f"Source Listing: {row.external_thread_id}", text)
         self.assertIn("To: shubham.sonkar@gvrinfotek.com", text)
@@ -219,12 +242,29 @@ class TelegramReviewCommandTests(unittest.TestCase):
         self._add_candidate(subject="Second candidate subject")
         reply = self.runtime.handle_command(123, "u1", "tester", "/needs_review")
 
-        self.assertIsInstance(reply, str)
-        text = str(reply)
+        self.assertIsInstance(reply, TelegramReply)
+        text = reply.text if isinstance(reply, TelegramReply) else ""
         self.assertIn("Needs Review: 2", text)
         self.assertIn(f"#{first.id} - First candidate subject", text)
         self.assertNotIn("To:", text)
         self.assertNotIn("Draft Preview:", text)
+
+    def test_a_deactivated_owner_cannot_run_telegram_commands(self) -> None:
+        with self.session_factory() as db:
+            db.add(User(
+                owner_id="default-owner",
+                email="disabled@example.com",
+                disabled_at=datetime.now(UTC),
+            ))
+            db.commit()
+        previous = settings.feature_auth_enabled
+        settings.feature_auth_enabled = True
+        try:
+            reply = self.runtime.handle_command(123, "u1", "tester", "/needs_review")
+        finally:
+            settings.feature_auth_enabled = previous
+
+        self.assertEqual(reply, "Account is deactivated.")
 
     def test_review_message_truncates_long_draft_preview(self) -> None:
         candidate = EmailResponse.model_validate(
@@ -235,7 +275,8 @@ class TelegramReviewCommandTests(unittest.TestCase):
             )
         )
 
-        text = TelegramRuntime._format_review_message(candidate)
+        reply = TelegramRuntime._format_review_message(candidate)
+        text = reply.text
 
         self.assertIn("[truncated]", text)
         self.assertLess(len(text), 2000)

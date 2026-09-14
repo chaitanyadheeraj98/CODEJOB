@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.ai.draft_quality import assess_draft_quality
@@ -278,6 +278,7 @@ class UserSettings(Base):
     feature_email_tracking_enabled: Mapped[bool] = mapped_column(default=False)
     feature_reply_inbox_enabled: Mapped[bool] = mapped_column(default=False)
     feature_label_tracking_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    feature_application_watches_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     feature_applications_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_automation_enabled: Mapped[bool] = mapped_column(default=False)
     feature_application_outreach_drafts_enabled: Mapped[bool] = mapped_column(default=False)
@@ -496,6 +497,191 @@ class EmailOpenEvent(Base):
     is_likely_proxy: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class User(Base):
+    """A person who may sign in. There is no signup and no password.
+
+    Access is decided by Google: the OAuth consent screen's **test-user list is
+    the sole access list**, so a row here is created by the first successful
+    sign-in rather than by an invite or an admin form. An app-side allowlist was
+    considered and rejected - Google exposes no API for the test-user list, so
+    two hand-maintained lists would drift, and both drift directions produce
+    errors that point nowhere near the cause.
+
+    Consequently there is no `password_hash` column, and there never should be.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # The join key to all 82 existing owner_id columns. Opaque and generated
+    # (`usr_<uuid4hex>`), never supplied by a client: it is already stamped
+    # across the whole database, so putting an email in it would leak identity
+    # into every row and break the moment somebody changes their address.
+    owner_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    # Google's `sub` claim, and the real identity key - it survives an email
+    # change, which `email` does not. Nullable only because a row can exist
+    # before B2's identity scopes land.
+    google_subject: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    display_name: Mapped[str] = mapped_column(String(120), default="")
+    # Server-side only. Never settable through a request body, never read from a
+    # token claim - see the /admin routes.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Soft disable. Removing someone from the GCP test-user list stops new
+    # sign-ins but does not end a live session, so the app needs its own switch.
+    disabled_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class UserSession(Base):
+    """A signed-in browser session.
+
+    Stored in the database rather than carried in a stateless JWT, because a
+    JWT cannot be revoked before it expires and "log out everywhere" and
+    "disable this account now" are both requirements the moment there are 100
+    accounts. The cost is one indexed lookup per request.
+    """
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", name="fk_user_sessions_user", ondelete="CASCADE"),
+        index=True,
+    )
+    # SHA-256 of the cookie value, never the value. A database that leaks must
+    # not hand over live sessions with it.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    user_agent: Mapped[str] = mapped_column(String(400), default="")
+    remote_ip: Mapped[str] = mapped_column(String(64), default="")
+
+
+class GmailCredential(Base):
+    """One owner's Gmail OAuth connection, refresh token encrypted at rest.
+
+    Replaces a single JSON file on a Docker volume that the backend and worker
+    both wrote with no locking. A row is not just tidier: refresh tokens are
+    credentials, so they need encryption and an audit trail, and the weekly
+    reconnect that Testing-status OAuth forces makes "list every connection and
+    its state" an operational query a directory listing cannot answer.
+
+    No foreign key to `user_settings` despite the shared `owner_id`:
+    settings rows are created lazily, so a credential can legitimately be
+    written before one exists and an FK would turn that ordering into a crash.
+    The relationship is enforced in the service layer instead.
+    """
+
+    __tablename__ = "gmail_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    # The address that actually consented, read from users.getProfile after the
+    # token exchange. Indexed because a Pub/Sub notification identifies the
+    # mailbox by `emailAddress` and nothing else - capability 4 looks up rows
+    # by exactly this column. 320 is the RFC 5321 maximum.
+    google_email: Mapped[str] = mapped_column(String(320), default="", index=True)
+    # Google's stable `sub` claim, which survives the user changing their email
+    # address. Nullable because reading it needs the openid scope, and widening
+    # the scope set would force every existing user to re-consent.
+    google_subject: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    access_token_encrypted: Mapped[str] = mapped_column(Text, default="")
+    # Nullable because Google omits the refresh token on re-consent unless
+    # prompt=consent is forced. See gmail_credential_service.save_credentials,
+    # which preserves the stored one rather than writing this null.
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_uri: Mapped[str] = mapped_column(String(255), default="https://oauth2.googleapis.com/token")
+    # What Google actually granted, which can be narrower than what was asked.
+    scopes_json: Mapped[str] = mapped_column(Text, default="[]")
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    connected_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    # Non-null means "needs reconnect". Indexed because get_credentials filters
+    # on it on every single Gmail call.
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+
+    # --- Gmail push (Pub/Sub) watch state -------------------------------
+    # All six live on this row rather than a table of their own, because they
+    # describe the connection and die with it. A separate table would need its
+    # own cascade on disconnect, deactivation and hard delete - three more
+    # places to forget.
+    #
+    # The cursor is the authoritative one of the six. A Pub/Sub notification
+    # carries a history ID too, but it is only a reason to drain; what has
+    # actually been processed is this.
+    #
+    # String, not integer, because Gmail documents `historyId` as opaque. It
+    # happens to be decimal today, and the moment code starts doing arithmetic
+    # on it that becomes a dependency on an unpromised format. Ordering
+    # comparisons belong to Gmail's history API, not to us.
+    gmail_history_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Gmail returns this as epoch milliseconds; stored as a real timestamp so
+    # "is the watch still alive" is a SQL comparison rather than a unit
+    # conversion at every call site. Roughly seven days out, renewed daily.
+    gmail_watch_expiration_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # When renewal last succeeded, which is what the daily decision reads.
+    # Distinct from the expiration: a renewal that failed leaves the old
+    # expiration in place and this untouched, and the gap between them is the
+    # signal that delivery is about to stop.
+    gmail_watch_renewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Last valid notification accepted, and last history batch committed. Two
+    # columns because the interesting failure is one without the other:
+    # notifications arriving and nothing being processed is a stuck worker,
+    # and neither moving is a stopped subscriber.
+    gmail_last_notification_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    gmail_last_event_processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Operational reason the watch is not working, shown in Settings. Safe text
+    # only - a status code and what it means. Never a token, an address, a
+    # subject, a Pub/Sub payload or a Google exception body, which is why
+    # callers pass a chosen string rather than `str(exc)`.
+    gmail_watch_last_error: Mapped[str] = mapped_column(Text, default="")
+
+
+class ProviderCredential(Base):
+    __tablename__ = "provider_credentials"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "provider", name="ux_provider_credentials_owner_provider"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    api_key_encrypted: Mapped[str] = mapped_column(Text, default="")
+    base_url: Mapped[str] = mapped_column(String(255), default="")
+    label: Mapped[str] = mapped_column(String(120), default="")
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
+class TelegramLink(Base):
+    __tablename__ = "telegram_links"
+    __table_args__ = (
+        UniqueConstraint("owner_id", name="ux_telegram_links_owner_id"),
+        UniqueConstraint("chat_id", name="ux_telegram_links_chat_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    telegram_user_id: Mapped[str] = mapped_column(String(40), default="")
+    telegram_username: Mapped[str] = mapped_column(String(64), default="")
+    link_code_hash: Mapped[str] = mapped_column(String(64), default="")
+    link_code_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    linked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    alerts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    action_pin_hash: Mapped[str] = mapped_column(String(128), default="")
+    chat_session_id: Mapped[int | None] = mapped_column(ForeignKey("chat_sessions.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
 class GmailLabel(Base):
     __tablename__ = "gmail_labels"
     __table_args__ = (UniqueConstraint("owner_id", "external_label_id", name="ux_gmail_labels_owner_external"),)
@@ -539,6 +725,7 @@ class RecruiterWatch(Base):
     watch_type: Mapped[str] = mapped_column(String(10), index=True)
     value: Mapped[str] = mapped_column(String(255), index=True)
     source_thread_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    source_application_ids_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
     origin_label_external_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     match_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
@@ -601,10 +788,12 @@ class EmailReplyMessage(Base):
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
+    __table_args__ = (Index("ix_chat_sessions_origin_updated_at", "origin", "updated_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
     title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    origin: Mapped[str] = mapped_column(String(20), default="web")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 
@@ -625,6 +814,10 @@ class ChatTurn(Base):
     __tablename__ = "chat_turn"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # F1: denormalised from chat_sessions. A turn reached its user only through
+    # session_id, so "this user's last 50 turns" was a join before it was a
+    # query - and that is the shape every observability question takes.
+    owner_id: Mapped[str] = mapped_column(String(100), default="default-owner", index=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("chat_sessions.id"), index=True)
     message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"), nullable=True)
     model: Mapped[str] = mapped_column(String(200), default="")
@@ -642,6 +835,12 @@ class ChatTurn(Base):
     budget_exhausted: Mapped[bool] = mapped_column(Boolean, default=False)
     mcp_cached: Mapped[bool] = mapped_column(Boolean, default=False)
     prompt_sha256: Mapped[str] = mapped_column(String(64))
+    # F2: the id this turn's request returned in its X-Request-ID header.
+    # Nullable because a turn recorded outside a request genuinely has none,
+    # and history predates the column. Indexed because the question it answers
+    # is a point lookup - "find the turn with this id" - on a bounded,
+    # high-cardinality string.
+    correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)
 
 
@@ -690,6 +889,7 @@ class CanonicalEntityTaxonomyEntry(Base):
     embedding_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
     embedding_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="approved", index=True)
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
 

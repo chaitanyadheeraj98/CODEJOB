@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.config import settings
 from app.db import SessionLocal
 from app.models import RecruiterEmail
+from app import tenancy
 
 MAX_IDS = 100
 MAX_REASON_CHARS = 500
@@ -76,7 +77,7 @@ def propose_candidate_action(action: str, candidate_ids: list[int], reason: str 
         found = {
             row.id: row
             for row in db.query(RecruiterEmail).filter(
-                RecruiterEmail.owner_id == settings.owner_id,
+                RecruiterEmail.owner_id == tenancy.owner_id(),
                 RecruiterEmail.id.in_(requested),
             )
         }

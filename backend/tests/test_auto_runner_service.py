@@ -1,7 +1,7 @@
 import unittest
 from threading import Lock
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from app.services.auto_runner_service import AutoRunnerService
 
@@ -35,22 +35,33 @@ class AutoRunnerApplicationReminderTests(unittest.TestCase):
         values.update(overrides)
         return SimpleNamespace(**values)
 
-    def _run(self, settings: SimpleNamespace) -> Mock:
+    def _run(self, settings: SimpleNamespace, telegram_retention: Mock | None = None) -> Mock:
         db = Mock()
+        opened = []
         reminder = Mock()
+
+        def session_factory():
+            opened.append(db)
+            return db
+
         service = AutoRunnerService(
-            session_factory=lambda: db,
+            session_factory=session_factory,
             get_settings=lambda _db: settings,
             run_once=Mock(),
             run_nvoids_once=Mock(),
             check_live_replies=Mock(),
             run_reminder_sweep=reminder,
             run_resume_tracking_sweep=Mock(),
+            run_telegram_retention_sweep=telegram_retention or Mock(),
             action_lock=Lock(),
             stop_event=_OneIterationStop(),
         )
         service.run_loop()
-        db.close.assert_called_once()
+        # Opened equals closed, rather than "exactly one". The property this
+        # guards is that the loop leaks no session; the count was incidental,
+        # and G3's hourly purge sweep legitimately opens a second one because
+        # it is global work rather than part of any owner's tick.
+        self.assertEqual(db.close.call_count, len(opened))
         return reminder
 
     def test_reminder_sweep_runs_on_its_own_clamped_interval(self) -> None:
@@ -61,6 +72,12 @@ class AutoRunnerApplicationReminderTests(unittest.TestCase):
     def test_reminder_sweep_requires_both_application_flags(self) -> None:
         self._run(self._settings(feature_applications_enabled=False)).assert_not_called()
         self._run(self._settings(feature_application_automation_enabled=False)).assert_not_called()
+
+    def test_telegram_retention_sweep_runs_when_the_master_switch_is_on(self) -> None:
+        retention = Mock()
+        with patch("app.services.auto_runner_service.settings.feature_telegram_chat_enabled", True):
+            self._run(self._settings(), retention)
+        retention.assert_called_once()
 
 
 if __name__ == "__main__":

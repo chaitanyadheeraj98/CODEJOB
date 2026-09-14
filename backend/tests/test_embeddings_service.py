@@ -119,6 +119,10 @@ class EmbeddingsServiceTests(unittest.TestCase):
             with self._settings(
                 hf_token="hf_test_token",
                 semantic_embedding_sbert_device="cpu",
+                # This test loads the model, which is the worker's job. C4 made
+                # that an explicit refusal in an API process rather than
+                # something that merely worked and cost 486 MB.
+                process_role="worker",
             ):
                 fake_constructor = SimpleNamespace()
                 fake_module = SimpleNamespace(SentenceTransformer=lambda *args, **kwargs: fake_constructor)

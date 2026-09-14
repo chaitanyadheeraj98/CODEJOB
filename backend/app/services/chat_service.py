@@ -4,7 +4,8 @@ import json
 import logging
 from collections import Counter
 from collections.abc import AsyncIterator
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from uuid import uuid4
@@ -19,17 +20,34 @@ from app.ai.chat.history import db_messages_to_langchain, langchain_message_to_d
 from app.ai.chat.system_prompt import prompt_sha256
 from app.config import settings
 from app.models import ChatMessage, ChatSession, ChatTurn, UserSettings
+from app.services import admission_service
+from app.services.admission_service import CHAT_TURN_POOL, AdmissionRejected
 from app.services.chat_attachment_service import ChatAttachmentService
+from app import correlation, tenancy
 
 
 def _sse(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+@dataclass(frozen=True)
+class ChatTurnResult:
+    assistant_text: str
+    tool_rows: list[ChatMessage]
+    failure_code: str | None = None
+
+
 class ChatService:
     @staticmethod
     def _record_turn(db: Session, **values) -> ChatTurn | None:
         try:
+            # Stamped here rather than at each call site: this is the only
+            # place a ChatTurn is created, so it cannot be forgotten, and the
+            # owner comes from the verified session like everywhere else.
+            values.setdefault("owner_id", tenancy.owner_id())
+            # F2: the same id the request returned in its header. None outside
+            # a request, which is honest - see app.correlation.
+            values.setdefault("correlation_id", correlation.correlation_id())
             row = ChatTurn(**values)
             db.add(row)
             db.commit()
@@ -118,7 +136,7 @@ class ChatService:
     def _session_or_404(db: Session, session_id: int) -> ChatSession:
         row = (
             db.query(ChatSession)
-            .filter(ChatSession.owner_id == settings.owner_id, ChatSession.id == session_id)
+            .filter(ChatSession.owner_id == tenancy.owner_id(), ChatSession.id == session_id)
             .first()
         )
         if row is None:
@@ -135,7 +153,7 @@ class ChatService:
         """
         row = (
             db.query(UserSettings.candidate_profile_markdown)
-            .filter(UserSettings.owner_id == settings.owner_id)
+            .filter(UserSettings.owner_id == tenancy.owner_id())
             .first()
         )
         return (row[0] if row else "") or ""
@@ -153,7 +171,7 @@ class ChatService:
         return cleaned
 
     def create_session(self, db: Session) -> ChatSession:
-        row = ChatSession(owner_id=settings.owner_id)
+        row = ChatSession(owner_id=tenancy.owner_id())
         db.add(row)
         db.commit()
         db.refresh(row)
@@ -162,7 +180,7 @@ class ChatService:
     def list_sessions(self, db: Session) -> list[ChatSession]:
         return (
             db.query(ChatSession)
-            .filter(ChatSession.owner_id == settings.owner_id)
+            .filter(ChatSession.owner_id == tenancy.owner_id())
             .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
             .all()
         )
@@ -259,20 +277,77 @@ class ChatService:
         db.refresh(row)
         return row
 
+    @asynccontextmanager
+    async def _admission_lease(self, db: Session, session_id: int, model: str | None):
+        try:
+            lease = await admission_service.acquire_async(
+                CHAT_TURN_POOL,
+                owner_id=tenancy.owner_id(),
+                global_limit=settings.chat_max_concurrent_turns,
+                per_user_limit=settings.chat_max_turns_per_user,
+                # Beyond the budget, so a turn that runs its full length keeps
+                # its slot, but a worker killed mid-turn gives it back.
+                ttl_seconds=settings.chat_turn_budget_seconds + 60,
+                local_limit=settings.chat_local_fallback_turns,
+                # C2: queue rather than refuse on sight. At peak, "try again in
+                # a moment" for someone who would have waited two seconds is a
+                # worse answer than waiting. 503 becomes the timeout, not the
+                # first response.
+                wait_seconds=settings.chat_admission_wait_seconds,
+            )
+        except AdmissionRejected as exc:
+            self._record_turn(db, session_id=session_id, message_id=None, requested_model=model or "auto",
+                              failure_code="admission_rejected", prompt_sha256=prompt_sha256())
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        try:
+            yield
+        finally:
+            admission_service.release(lease)
+
     async def send_message(self, db: Session, session_id: int, user_text: str,
                            model: str | None = None, attachment_ids: list[int] | None = None) -> AsyncIterator[str]:
         self.validate_message(user_text)
         self._session_or_404(db, session_id)
-        if not turns.slots.acquire(blocking=False):
-            self._record_turn(db, session_id=session_id, message_id=None, requested_model=model or "auto",
-                              failure_code="admission_rejected", prompt_sha256=prompt_sha256())
-            raise HTTPException(status_code=503, detail="The assistant is handling other turns. Try again in a moment.")
-        try:
+        async with self._admission_lease(db, session_id, model):
             async with aclosing(self._send_message(db, session_id, user_text, model, attachment_ids)) as stream:
                 async for event in stream:
                     yield event
-        finally:
-            turns.slots.release()
+
+    async def complete_message(
+        self,
+        db: Session,
+        session_id: int,
+        user_text: str,
+        model: str | None = None,
+    ) -> ChatTurnResult:
+        self.validate_message(user_text)
+        self._session_or_404(db, session_id)
+        latest = db.query(ChatMessage.id).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.id.desc()).first()
+        previous_id = latest[0] if latest else 0
+        async with self._admission_lease(db, session_id, model):
+            async with aclosing(self._send_message(db, session_id, user_text, model, None)) as stream:
+                async for _ in stream:
+                    pass
+        rows = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session_id, ChatMessage.id > previous_id)
+            .order_by(ChatMessage.id.asc())
+            .all()
+        )
+        assistant = next((row for row in reversed(rows) if row.role == "assistant"), None)
+        turn = (
+            db.query(ChatTurn)
+            .filter(ChatTurn.message_id == assistant.id)
+            .order_by(ChatTurn.id.desc())
+            .first()
+            if assistant is not None
+            else None
+        )
+        return ChatTurnResult(
+            assistant_text=assistant.content if assistant is not None else "",
+            tool_rows=[row for row in rows if row.role == "tool"],
+            failure_code=turn.failure_code if turn is not None else None,
+        )
 
     async def _send_message(
         self,

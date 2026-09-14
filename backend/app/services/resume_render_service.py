@@ -20,7 +20,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-from threading import BoundedSemaphore
 from typing import Literal
 from dataclasses import dataclass
 from functools import lru_cache
@@ -35,9 +34,17 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 from pydantic import BaseModel, Field, model_validator
 
+from app import tenancy
+from app.config import settings
+from app.services import admission_service
+from app.services.admission_service import RESUME_RENDER_POOL, AdmissionRejected
+
 logger = logging.getLogger(__name__)
 
-_RENDER_SLOTS = BoundedSemaphore(4)
+# Was BoundedSemaphore(4) - four slots per *process*, which is four slots in
+# total only while there is one API process. LibreOffice is the heaviest thing
+# this service starts, so an uncoordinated 4xN is the cap that matters least
+# and hurts most.
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 
@@ -696,9 +703,19 @@ def _convert_document(markdown: str, spec: ResumeFormatSpec, target: Path, fmt: 
     binary = _soffice()
     if binary is None:
         raise RuntimeError("PDF and thumbnail rendering need LibreOffice. Download the .docx instead.")
-    # ponytail: four slots per API process; use shared admission if the API gains multiple workers.
-    if not _RENDER_SLOTS.acquire(blocking=False):
-        raise RuntimeError("Resume rendering is busy. Try again shortly.")
+    try:
+        lease = admission_service.acquire(
+            RESUME_RENDER_POOL,
+            owner_id=tenancy.owner_id(),
+            global_limit=settings.resume_render_max_concurrent,
+            per_user_limit=settings.resume_render_max_per_user,
+            # Comfortably past the 75s subprocess timeout below, so a render
+            # that runs long keeps its slot and a killed one does not.
+            ttl_seconds=150.0,
+            local_limit=settings.resume_render_max_concurrent,
+        )
+    except AdmissionRejected as exc:
+        raise RuntimeError("Resume rendering is busy. Try again shortly.") from exc
     try:
         with tempfile.TemporaryDirectory() as work:
             source = build_docx(markdown, spec, Path(work) / "resume.docx")
@@ -720,7 +737,7 @@ def _convert_document(markdown: str, spec: ResumeFormatSpec, target: Path, fmt: 
             shutil.copyfile(produced, target)
         return target
     finally:
-        _RENDER_SLOTS.release()
+        admission_service.release(lease)
 
 
 def build_pdf(markdown: str, spec: ResumeFormatSpec, target: Path) -> Path:

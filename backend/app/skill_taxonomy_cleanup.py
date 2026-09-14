@@ -10,6 +10,7 @@ from app.db import SessionLocal
 from app.models import CustomSkillTaxonomyEntry
 from app.parsing.skill_audit import custom_skill_requires_review
 from app.skill_taxonomy import clear_skill_taxonomy_cache
+from app import tenancy
 
 
 def flagged_approved_entries(db: Session, *, owner_id: str) -> list[CustomSkillTaxonomyEntry]:
@@ -31,7 +32,7 @@ def run_cleanup(
     owner_id: str | None = None,
     limit: int = 100,
 ) -> dict[str, object]:
-    effective_owner_id = owner_id or settings.owner_id
+    effective_owner_id = owner_id or tenancy.owner_id()
     with SessionLocal() as db:
         flagged = flagged_approved_entries(db, owner_id=effective_owner_id)
         requested_ids = apply_ids or set()

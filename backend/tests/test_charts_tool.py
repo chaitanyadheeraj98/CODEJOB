@@ -77,7 +77,12 @@ class GetChartTests(unittest.TestCase):
             db.commit()
 
     def test_activity_trend_counts_this_owners_sends_only(self) -> None:
-        payload = get_chart("activity_trend", range="current_day", bucket="hour")
+        now = datetime.now(UTC)
+        with patch(
+            "app.mcp_server.tools.charts.analytics_service.range_bounds",
+            return_value=(now - timedelta(hours=4), now),
+        ):
+            payload = get_chart("activity_trend", range="current_day", bucket="hour")
 
         self.assertEqual(payload["action"], "render_chart")
         self.assertEqual(payload["chart_type"], "activity_trend")
@@ -85,7 +90,12 @@ class GetChartTests(unittest.TestCase):
         self.assertEqual(sum(int(point["value"]) for point in payload["series"]), 3)
 
     def test_empty_buckets_are_present_rather_than_omitted(self) -> None:
-        payload = get_chart("activity_trend", range="current_day", bucket="hour")
+        now = datetime.now(UTC)
+        with patch(
+            "app.mcp_server.tools.charts.analytics_service.range_bounds",
+            return_value=(now - timedelta(hours=4), now),
+        ):
+            payload = get_chart("activity_trend", range="current_day", bucket="hour")
 
         self.assertGreater(len(payload["series"]), 3)
         self.assertTrue(any(int(point["value"]) == 0 for point in payload["series"]))

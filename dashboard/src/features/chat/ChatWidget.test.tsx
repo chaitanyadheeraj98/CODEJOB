@@ -211,8 +211,9 @@ describe('ChatWidget', () => {
       label: 'Send Email',
       endpoint: '/candidates/44/send-chat-reply',
       // A proposal with no documents still sends the key, so the server sees an
-      // explicit empty list rather than a missing field.
-      body: { body: 'Thanks', subject: 'Re: Role', document_ids: [] },
+      // explicit empty list rather than a missing field. The envelope goes with
+      // it for the same reason: what the card showed is what leaves.
+      body: { body: 'Thanks', subject: 'Re: Role', to: 'to@example.com', cc: '', resume_id: 0, confirm_new_recipients: false, document_ids: [] },
       response: { sent: true, message_id: 'gmail-1', attached_documents: [] },
       outcome: 'Email sent.',
     },

@@ -12,6 +12,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import RecruiterEmail
 from app.services.sendability_service import resolve_sendability_status
+from app import tenancy
 
 VALID_CANDIDATE_STATUSES = (
     "needs_review",
@@ -98,7 +99,7 @@ def search_candidates(
         resolved_status, status_error = _resolve_status(status)
         if status_error:
             return {"error": status_error}
-        rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
+        rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == tenancy.owner_id())
         if resolved_status:
             rows = rows.filter(RecruiterEmail.state == resolved_status)
         if record_ids:
@@ -152,7 +153,7 @@ def get_candidate(email_id: int) -> dict[str, object]:
     try:
         row = (
             db.query(RecruiterEmail)
-            .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+            .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == email_id)
             .first()
         )
         if row is None:
@@ -206,7 +207,7 @@ def count_received_emails(date_from: str = "", date_to: str = "", sender: str = 
             return {"error": f"Invalid date_to '{date_to}'. Use YYYY-MM-DD."}
 
         received_at = func.coalesce(RecruiterEmail.gmail_received_at, RecruiterEmail.created_at)
-        rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == settings.owner_id)
+        rows = db.query(RecruiterEmail).filter(RecruiterEmail.owner_id == tenancy.owner_id())
         if start is not None:
             rows = rows.filter(received_at >= datetime.combine(start, time.min))
         if end is not None:
@@ -242,7 +243,7 @@ def get_draft_status(email_id: int) -> dict[str, object]:
     try:
         row = (
             db.query(RecruiterEmail)
-            .filter(RecruiterEmail.owner_id == settings.owner_id, RecruiterEmail.id == email_id)
+            .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.id == email_id)
             .first()
         )
         if row is None:

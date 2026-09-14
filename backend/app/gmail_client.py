@@ -14,6 +14,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict, cast
 
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -21,11 +22,31 @@ from googleapiclient.errors import HttpError
 
 from app.ai.draft_formatting import draft_text_to_html
 from app.config import settings
+from app import tenancy
+from app.db import session_scope
 from app.parsing.document_extraction import clean_html_text
+from app.services import gmail_credential_service, google_identity_service
 
 logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"]
+# Identity scopes, added for B2. They are what makes one consent serve both
+# sign-in and mailbox access, and they are the only way to obtain the stable
+# `sub` claim - which is why GmailCredential.google_subject was nullable until
+# now. Adding them forces a one-time re-consent for anyone already connected.
+IDENTITY_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email"]
+for _scope in IDENTITY_SCOPES:
+    if _scope not in SCOPES:
+        SCOPES.append(_scope)
+
+# Google does not echo the requested scope list verbatim once `openid` is in
+# it: it reorders, and it adds the userinfo.profile scope that `openid` implies.
+# oauthlib treats any difference as tampering and raises "Scope has changed",
+# which would abort every consent with an error that looks nothing like its
+# cause. Relaxing the check is the documented remedy and is safe here because
+# the token's audience and signature are verified separately, in
+# google_identity_service.verify_id_token.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 if SHEETS_SCOPE not in SCOPES:
     SCOPES.append(SHEETS_SCOPE)
@@ -84,12 +105,27 @@ def is_gmail_configured() -> bool:
     return bool(settings.google_client_id and settings.google_client_secret and settings.google_redirect_uri)
 
 
+# Gmail connect does not use `settings.google_redirect_uri`. That one belongs to
+# app login (`/auth/google/callback`), and handing it to this flow sent the
+# Gmail code to the login handler, which rejected a state it never issued and
+# answered `?login_error=state_mismatch` while the listener below waited for a
+# code that never arrived. `run_local_server` overwrites `redirect_uri` with
+# this loopback regardless, so preparing the URL with anything else only means
+# the URL the user opens is not the one the listener is waiting for.
+OAUTH_LOOPBACK_HOST = "localhost"
+OAUTH_LOOPBACK_PORT = 8080
+
+
+def oauth_loopback_redirect_uri() -> str:
+    return f"http://{OAUTH_LOOPBACK_HOST}:{OAUTH_LOOPBACK_PORT}/"
+
+
 def _credentials_payload() -> dict[str, Any]:
     return {
         "installed": {
             "client_id": settings.google_client_id,
             "client_secret": settings.google_client_secret,
-            "redirect_uris": [settings.google_redirect_uri],
+            "redirect_uris": [oauth_loopback_redirect_uri(), settings.google_redirect_uri],
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
         }
@@ -101,24 +137,57 @@ def _ensure_token_parent() -> None:
     token_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _load_credentials() -> Credentials:
+class GmailReconnectRequired(RuntimeError):
+    def __init__(self, owner_id: str) -> None:
+        self.owner_id = owner_id
+        super().__init__("Gmail connection needs reconnecting.")
+
+
+def _load_credentials(owner_id: str | None = None) -> Credentials:
+    owner_id = owner_id or tenancy.owner_id()
     if not is_gmail_configured():
         raise RuntimeError("Gmail OAuth is not configured")
 
     token_path = Path(settings.google_token_path)
     creds: Credentials | None = None
-    if token_path.exists():
+    if settings.feature_db_credentials_enabled:
+        with session_scope() as db:
+            creds = gmail_credential_service.get_credentials(db, owner_id)
+            if (
+                creds is None
+                # settings.owner_id, deliberately, not tenancy.owner_id():
+                # the shared token file belongs to the legacy single-tenant
+                # owner, and a signed-in user must never be able to adopt it.
+                and owner_id == settings.owner_id
+                and gmail_credential_service.import_legacy_token_file(db, owner_id)
+            ):
+                creds = gmail_credential_service.get_credentials(db, owner_id)
+    elif token_path.exists():
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
     if creds and creds.valid:
+        _backfill_profile_email(owner_id, creds)
         return creds
 
     if creds and creds.expired and creds.refresh_token:
         from google.auth.transport.requests import Request
 
-        creds.refresh(Request())
-        _ensure_token_parent()
-        token_path.write_text(creds.to_json(), encoding="utf-8")
+        try:
+            creds.refresh(Request())
+        except RefreshError as exc:
+            if not settings.feature_db_credentials_enabled:
+                raise
+            with session_scope() as db:
+                gmail_credential_service.mark_revoked(db, owner_id, "refresh_failed")
+            logger.warning("gmail_token_refresh_failed owner_id=%s error=refresh_failed", owner_id)
+            raise GmailReconnectRequired(owner_id) from exc
+        if settings.feature_db_credentials_enabled:
+            with session_scope() as db:
+                gmail_credential_service.mark_refreshed(db, owner_id, creds)
+            _backfill_profile_email(owner_id, creds)
+        else:
+            _ensure_token_parent()
+            token_path.write_text(creds.to_json(), encoding="utf-8")
         return creds
 
     if "PYTEST_CURRENT_TEST" in os.environ:
@@ -127,10 +196,12 @@ def _load_credentials() -> Credentials:
             "under pytest (no cached/refreshable token). The calling function needs "
             "to be mocked in this test instead of reaching _load_credentials()."
         )
+    if settings.feature_db_credentials_enabled:
+        raise GmailReconnectRequired(owner_id)
 
     global _oauth_last_authorization_url
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
-    flow.redirect_uri = settings.google_redirect_uri
+    flow.redirect_uri = oauth_loopback_redirect_uri()
     # In Docker, there is no local browser in-container; user opens the printed URL manually.
     extra_auth_kwargs: dict[str, str] = {"prompt": "select_account"}
     if settings.google_login_hint:
@@ -144,9 +215,9 @@ def _load_credentials() -> Credentials:
     creds = cast(
         Credentials,
         flow_any.run_local_server(
-            host="localhost",
+            host=OAUTH_LOOPBACK_HOST,
             bind_addr="0.0.0.0",
-            port=8080,
+            port=OAUTH_LOOPBACK_PORT,
             open_browser=False,
             authorization_prompt_message="Please visit this URL to authorize this application: {url}",
             state=auth_state,
@@ -160,7 +231,7 @@ def _load_credentials() -> Credentials:
 
 def _prepare_oauth_flow() -> tuple[InstalledAppFlow, str, str, dict[str, str]]:
     flow = InstalledAppFlow.from_client_config(_credentials_payload(), SCOPES)
-    flow.redirect_uri = settings.google_redirect_uri
+    flow.redirect_uri = oauth_loopback_redirect_uri()
     extra_auth_kwargs: dict[str, str] = {"prompt": "select_account"}
     if settings.google_login_hint:
         extra_auth_kwargs["login_hint"] = settings.google_login_hint
@@ -173,28 +244,141 @@ def _run_prepared_oauth_flow(flow: InstalledAppFlow, auth_state: str, extra_auth
     creds = cast(
         Credentials,
         flow_any.run_local_server(
-            host="localhost",
+            host=OAUTH_LOOPBACK_HOST,
             bind_addr="0.0.0.0",
-            port=8080,
+            port=OAUTH_LOOPBACK_PORT,
             open_browser=False,
             authorization_prompt_message="Please visit this URL to authorize this application: {url}",
             state=auth_state,
             **extra_auth_kwargs,
         ),
     )
-    _ensure_token_parent()
-    token_path = Path(settings.google_token_path)
-    token_path.write_text(creds.to_json(), encoding="utf-8")
+    _persist_new_credentials(creds)
     return creds
 
 
-def _gmail_service() -> Any:
-    creds = _load_credentials()
+def _profile_email(creds: Credentials) -> str:
+    """The address that just consented, via users.getProfile.
+
+    Lives here rather than in gmail_credential_service because the import runs
+    one way only - gmail_client imports the service, never the reverse - and
+    this needs a Gmail API call. The service takes the result as an argument.
+
+    Costs one quota unit, once per connect, and needs no new scope:
+    gmail.modify already covers getProfile. Chosen over reading an ID token
+    precisely so the scope set does not change, which would force every
+    existing user to re-consent. `google_subject` stays null until B2 widens
+    the scopes deliberately.
+
+    Never fatal. A transient failure here must not cost the user a connection
+    they just completed; the address is backfilled on the next successful save.
+    """
+    try:
+        profile = build("gmail", "v1", credentials=creds).users().getProfile(userId="me").execute()
+        return str(_as_dict(profile).get("emailAddress") or "")
+    except Exception as exc:
+        # Type only, never the message. A provider error reaching this path can
+        # carry response text, and A5 established that provider errors do not
+        # go to the log.
+        logger.warning("gmail_profile_lookup_failed error=%s", type(exc).__name__)
+        return ""
+
+
+def _backfill_profile_email(owner_id: str, creds: Credentials) -> None:
+    """Fill in `google_email` for a row that arrived without one.
+
+    Found by flipping the flag on live data: the legacy token file's `account`
+    field is empty, so an imported credential has no address, and nothing would
+    ever fill it in - `save_credentials` only runs on a fresh consent, which an
+    imported owner never performs. That left the Settings card with no address
+    to show and, more seriously, no value in the column Pub/Sub will route on.
+
+    One getProfile call, once, only when the column is empty. A failure is
+    ignored: this is cosmetic until Pub/Sub lands, and must never break a Gmail
+    call that was about to succeed.
+    """
+    try:
+        with session_scope() as db:
+            row = gmail_credential_service.get_row(db, owner_id)
+            if row is None or row.google_email:
+                return
+        email = _profile_email(creds)
+        if not email:
+            return
+        with session_scope() as db:
+            row = gmail_credential_service.get_row(db, owner_id)
+            if row is not None and not row.google_email:
+                row.google_email = email[:320]
+        logger.info("gmail_credentials_email_backfilled owner_id=%s", owner_id)
+    except Exception as exc:
+        logger.warning(
+            "gmail_credentials_email_backfill_failed owner_id=%s error=%s", owner_id, type(exc).__name__
+        )
+
+
+def verified_identity(creds: Credentials):
+    """The verified Google identity behind a freshly issued credential.
+
+    Returns None when the credential carries no ID token, which is the case for
+    anything issued before the identity scopes were added. That is deliberate:
+    an existing connection must keep working until its owner happens to
+    reconnect, rather than being invalidated by a deploy.
+    """
+    raw = getattr(creds, "id_token", None)
+    if not raw:
+        return None
+    return google_identity_service.verify_id_token(str(raw))
+
+
+def store_credentials_for_owner(owner_id: str, creds: Credentials, *, identity=None) -> None:
+    """Persist a credential for a specific owner, from the web sign-in flow.
+
+    Distinct from `_persist_new_credentials` because the caller has already
+    verified the identity and matched it against the mailbox - repeating either
+    would mean a second getProfile call and a second verification of the same
+    token. The owner is passed explicitly, since sign-in is the one path where
+    it is emphatically not the configured constant.
+    """
+    with session_scope() as db:
+        gmail_credential_service.save_credentials(
+            db,
+            owner_id,
+            creds,
+            google_email=identity.email if identity is not None else _profile_email(creds),
+            google_subject=identity.subject if identity is not None else None,
+        )
+
+
+def _persist_new_credentials(creds: Credentials, owner_id: str | None = None) -> None:
+    owner_id = owner_id or tenancy.owner_id()
+    if not settings.feature_db_credentials_enabled:
+        _ensure_token_parent()
+        Path(settings.google_token_path).write_text(creds.to_json(), encoding="utf-8")
+        return
+
+    google_email = _profile_email(creds)
+    identity = verified_identity(creds)
+    google_subject = None
+    if identity is not None:
+        # The check that stops somebody signing in as themselves and attaching
+        # another account's mailbox. A mismatch raises, and nothing is stored.
+        google_identity_service.assert_identity_matches_mailbox(identity, google_email)
+        google_subject = identity.subject
+        google_email = identity.email
+
+    with session_scope() as db:
+        gmail_credential_service.save_credentials(
+            db, owner_id, creds, google_email=google_email, google_subject=google_subject
+        )
+
+
+def _gmail_service(owner_id: str | None = None) -> Any:
+    creds = _load_credentials(owner_id)
     return build("gmail", "v1", credentials=creds)
 
 
-def _sheets_service() -> Any:
-    creds = _load_credentials()
+def _sheets_service(owner_id: str | None = None) -> Any:
+    creds = _load_credentials(owner_id)
     return build("sheets", "v4", credentials=creds)
 
 
@@ -483,6 +667,122 @@ def get_candidates_by_message_ids(message_ids: list[str]) -> list[GmailMessageCa
         if candidate is not None:
             results.append(candidate)
     return results
+
+
+# --- push delivery ------------------------------------------------------
+#
+# Three thin wrappers, deliberately holding no policy. When to renew a watch,
+# what to do with a stale cursor and which messages matter all belong to
+# `gmail_pubsub_service`; what belongs here is the shape of Gmail's replies,
+# because that is what the rest of the application should not have to know.
+
+
+class StaleHistoryId(RuntimeError):
+    """Gmail no longer holds history from the cursor it was given.
+
+    Its own 404, given a name. The caller cannot retry its way out of this -
+    the record is gone - so it has to be distinguishable from the transient
+    failures that are worth retrying, which is the entire reason this is not
+    just an `HttpError` reaching the service layer.
+    """
+
+
+@dataclass(frozen=True)
+class MailboxWatch:
+    """What `users.watch` promises: where history starts, and when it lapses."""
+
+    history_id: str
+    expiration_at: datetime | None
+
+
+@dataclass(frozen=True)
+class HistoryPage:
+    message_ids: tuple[str, ...]
+    next_page_token: str | None
+    history_id: str | None
+
+
+def watch_mailbox(topic_name: str) -> MailboxWatch:
+    """Ask Gmail to publish this mailbox's changes to `topic_name`.
+
+    No `labelIds` filter. Restricting the watch to INBOX would be cheaper and
+    would miss two things this application needs: replies sent from Gmail
+    itself, and the label transitions that tracked conversations are built on.
+    Filtering happens here, where the tracked-label catalog is known.
+    """
+    response = _as_dict(
+        _gmail_service().users().watch(userId="me", body={"topicName": topic_name}).execute()
+    )
+    return MailboxWatch(
+        history_id=str(response.get("historyId") or ""),
+        expiration_at=_epoch_millis_to_utc(response.get("expiration")),
+    )
+
+
+def stop_mailbox_watch() -> None:
+    """Stop push delivery for this mailbox. Idempotent at Gmail's end."""
+    _gmail_service().users().stop(userId="me").execute()
+
+
+def list_history(start_history_id: str, page_token: str | None = None) -> HistoryPage:
+    """One page of changes since `start_history_id`.
+
+    Returns message ids only, from `messagesAdded`, `labelsAdded` and
+    `labelsRemoved` together. A removal is not a separate kind of event to the
+    caller: every id here is refetched, and a refetched message carries its
+    *current* labels, which is what deciding thread membership needs whether a
+    label was just added or just taken away.
+
+    `historyTypes` is deliberately not passed, so Gmail returns every type.
+    Narrowing it would silently drop the label transitions above.
+
+    Raises `StaleHistoryId` when Gmail answers 404, which is its documented way
+    of saying the cursor has aged out.
+    """
+    try:
+        response = _as_dict(
+            _gmail_service()
+            .users()
+            .history()
+            .list(userId="me", startHistoryId=start_history_id, pageToken=page_token)
+            .execute()
+        )
+    except HttpError as exc:
+        if getattr(getattr(exc, "resp", None), "status", None) == 404:
+            raise StaleHistoryId(start_history_id) from exc
+        raise
+
+    message_ids: list[str] = []
+    seen: set[str] = set()
+    for record in _as_list_of_dicts(response.get("history")):
+        for key in ("messagesAdded", "labelsAdded", "labelsRemoved"):
+            for entry in _as_list_of_dicts(record.get(key)):
+                message = _as_dict(entry.get("message"))
+                message_id = str(message.get("id") or "")
+                # Deduped here rather than by the caller: one history page
+                # routinely carries the same message three times over - added,
+                # then labelled, then unlabelled - and each duplicate would
+                # otherwise cost a full message fetch.
+                if message_id and message_id not in seen:
+                    seen.add(message_id)
+                    message_ids.append(message_id)
+
+    return HistoryPage(
+        message_ids=tuple(message_ids),
+        next_page_token=str(response.get("nextPageToken") or "") or None,
+        history_id=str(response.get("historyId") or "") or None,
+    )
+
+
+def _epoch_millis_to_utc(value: Any) -> datetime | None:
+    """Gmail sends watch expiry as epoch milliseconds in a string."""
+    try:
+        millis = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    if millis <= 0:
+        return None
+    return datetime.fromtimestamp(millis / 1000, tz=UTC)
 
 
 def list_thread_ids_by_label(label_id: str, max_results: int = 500) -> set[str]:
@@ -787,20 +1087,80 @@ def apply_gmail_label(
     return True
 
 
-def gmail_auth_status() -> tuple[bool, bool, str]:
+GMAIL_STATE_NOT_CONFIGURED = "not_configured"
+GMAIL_STATE_NOT_CONNECTED = "not_connected"
+GMAIL_STATE_CONNECTED = "connected"
+GMAIL_STATE_CONNECTED_REFRESHABLE = "connected_refreshable"
+GMAIL_STATE_NEEDS_RECONNECT = "needs_reconnect"
+
+
+def gmail_connection_state(owner_id: str | None = None) -> tuple[str, str]:
+    """Five states, because two were not enough to be truthful.
+
+    The old version reported `creds.valid`, which is False the moment the
+    *access* token passes its hour - so Settings read "Not authenticated" for a
+    perfectly healthy connection roughly 23 hours out of every 24, and the user
+    reasonably read that as "reconnect me". A refreshable credential is
+    connected; that is the whole point of holding a refresh token.
+
+    `connected_refreshable` is kept distinct from `connected` rather than
+    collapsed into it, because the two mean different things to an operator
+    debugging a sync: one will work right now, the other will work after one
+    extra round trip to Google.
+    """
     if not is_gmail_configured():
-        return False, False, "Missing Gmail OAuth configuration"
+        return GMAIL_STATE_NOT_CONFIGURED, "Missing Gmail OAuth configuration"
+
+    if settings.feature_db_credentials_enabled:
+        owner_id = owner_id or tenancy.owner_id()
+        with session_scope() as db:
+            # Adopt an existing token file here too, not only in
+            # _load_credentials. Found by flipping the flag live: Settings said
+            # "Not connected" on a perfectly working install until something
+            # happened to make a Gmail call, which is the same class of lie A7
+            # exists to remove. Idempotent, and a no-op once a row exists.
+            if (
+                # Same reasoning as the adoption guard in _load_credentials:
+                # only the legacy owner may adopt the shared token file.
+                owner_id == settings.owner_id
+                and gmail_credential_service.get_row(db, owner_id) is None
+            ):
+                gmail_credential_service.import_legacy_token_file(db, owner_id)
+            status = gmail_credential_service.connection_status(db, owner_id)
+        if status.revoked:
+            return GMAIL_STATE_NEEDS_RECONNECT, status.last_error or "Access was revoked. Reconnect Gmail."
+        if not status.connected:
+            return GMAIL_STATE_NOT_CONNECTED, "No Gmail account is connected yet."
+        if status.expires_at and status.expires_at > datetime.now(UTC):
+            return GMAIL_STATE_CONNECTED, "Ready"
+        return GMAIL_STATE_CONNECTED_REFRESHABLE, "Ready - the access token refreshes on next use."
+
     token_path = Path(settings.google_token_path)
     if not token_path.exists():
-        return True, False, "Token file missing. First sync will trigger OAuth."
+        return GMAIL_STATE_NOT_CONNECTED, "Token file missing. First sync will trigger OAuth."
     try:
         _ = json.loads(token_path.read_text(encoding="utf-8"))
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
         if creds.valid:
-            return True, True, "Ready"
-        return True, False, "Token exists but is not valid yet"
+            return GMAIL_STATE_CONNECTED, "Ready"
+        if creds.refresh_token:
+            return GMAIL_STATE_CONNECTED_REFRESHABLE, "Ready - the access token refreshes on next use."
+        return GMAIL_STATE_NEEDS_RECONNECT, "Stored token cannot be refreshed. Reconnect Gmail."
     except (ValueError, OSError, HttpError) as exc:
-        return True, False, f"Token read error: {exc}"
+        return GMAIL_STATE_NEEDS_RECONNECT, f"Token read error: {exc}"
+
+
+def gmail_auth_status(owner_id: str | None = None) -> tuple[bool, bool, str]:
+    """Back-compatible shim over `gmail_connection_state`.
+
+    `authenticated` now means "this app can act on the mailbox without asking
+    the user for anything", which includes the refreshable case. Callers that
+    only want a boolean keep working and stop lying.
+    """
+    state, detail = gmail_connection_state(owner_id)
+    configured = state != GMAIL_STATE_NOT_CONFIGURED
+    authenticated = state in (GMAIL_STATE_CONNECTED, GMAIL_STATE_CONNECTED_REFRESHABLE)
+    return configured, authenticated, detail
 
 
 def _extract_phone(text: str) -> str:

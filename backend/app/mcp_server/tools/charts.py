@@ -15,6 +15,7 @@ from app.models import (
     RecruiterOpportunity,
 )
 from app.services import analytics_service, field_coverage, normalization, resume_tracking_service
+from app import tenancy
 
 BUSINESS_TZ = ZoneInfo("America/Chicago")
 RANGE_OPTIONS = ("last_1h", "current_day", "current_week", "current_month", "current_year", "last_5y")
@@ -46,7 +47,7 @@ def _activity_trend(db, range_key: str, bucket: str, subject_id: int) -> dict[st
     start = analytics_service.ensure_utc(start)
     end = analytics_service.ensure_utc(end)
     bars = analytics_service.productivity_trend_bars(
-        db, owner_id=settings.owner_id, start=start, end=end, bucket=bucket
+        db, owner_id=tenancy.owner_id(), start=start, end=end, bucket=bucket
     )
     series = [
         {
@@ -80,7 +81,7 @@ def _candidate_states(db, range_key: str, bucket: str, subject_id: int) -> dict[
     rows = (
         db.query(RecruiterEmail.state, func.count(RecruiterEmail.id))
         .filter(
-            RecruiterEmail.owner_id == settings.owner_id,
+            RecruiterEmail.owner_id == tenancy.owner_id(),
             RecruiterEmail.created_at >= start,
             RecruiterEmail.created_at <= end,
         )
@@ -114,7 +115,7 @@ def _candidate_states(db, range_key: str, bucket: str, subject_id: int) -> dict[
 
 def _resume_funnel(db, range_key: str, bucket: str, subject_id: int) -> dict[str, object]:
     metrics = resume_tracking_service.combined_resume_funnel_metrics(
-        db, owner_id=settings.owner_id, resume_asset_id=subject_id
+        db, owner_id=tenancy.owner_id(), resume_asset_id=subject_id
     )
     total = int(metrics.get("total_submissions", 0) or 0)
     # The service stores rates (0-1 of total submissions), not per-stage counts.
@@ -163,7 +164,7 @@ def _resume_funnel(db, range_key: str, bucket: str, subject_id: int) -> dict[str
 def _application_pipeline(db, range_key: str, bucket: str, subject_id: int) -> dict[str, object]:
     rows = (
         db.query(Application.status, func.count(Application.id))
-        .filter(Application.owner_id == settings.owner_id, Application.deleted_at.is_(None))
+        .filter(Application.owner_id == tenancy.owner_id(), Application.deleted_at.is_(None))
         .group_by(Application.status)
         .all()
     )
@@ -226,7 +227,7 @@ def _role_demand(db, range_key: str, bucket: str, subject_id: int) -> dict[str, 
     rows = (
         db.query(RecruiterOpportunity)
         .filter(
-            RecruiterOpportunity.owner_id == settings.owner_id,
+            RecruiterOpportunity.owner_id == tenancy.owner_id(),
             RecruiterOpportunity.received_at >= start,
             RecruiterOpportunity.received_at <= end,
         )
@@ -275,7 +276,7 @@ def _location_by_work_mode(db, range_key: str, bucket: str, subject_id: int, wor
     wanted = normalization.normalize_work_mode(work_mode) if work_mode else None
     rows = (
         db.query(RecruiterOpportunity)
-        .filter(RecruiterOpportunity.owner_id == settings.owner_id)
+        .filter(RecruiterOpportunity.owner_id == tenancy.owner_id())
         .all()
     )
     counts: dict[str, int] = {}
@@ -429,7 +430,7 @@ def get_chart(chart: str, range: str = "current_month", bucket: str = "", subjec
         if sources and isinstance(payload.get("provenance"), dict):
             payload["provenance"]["coverage"] = [
                 field_coverage.column_coverage(
-                    db, model, column, owner_id=settings.owner_id, label=label
+                    db, model, column, owner_id=tenancy.owner_id(), label=label
                 )
                 for model, column, label in sources
             ]

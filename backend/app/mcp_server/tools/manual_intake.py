@@ -5,6 +5,7 @@ from app.db import SessionLocal
 from app.models import RecentRun
 from app.services.chat_provenance import user_supplied_document
 from app.services.manual_intake_service import manual_intake_length_error, preview_duplicate
+from app import tenancy
 
 
 def propose_manual_requirement(attachment_id: int = 0, message_id: int = 0) -> dict[str, object]:
@@ -20,7 +21,7 @@ def propose_manual_requirement(attachment_id: int = 0, message_id: int = 0) -> d
     try:
         document = user_supplied_document(
             db,
-            settings.owner_id,
+            tenancy.owner_id(),
             attachment_id=attachment_id or None,
             message_id=message_id or None,
         )
@@ -42,7 +43,7 @@ def propose_manual_requirement(attachment_id: int = 0, message_id: int = 0) -> d
                 "limit": settings.manual_intake_max_chars,
                 "detail": error,
             }
-        duplicate = preview_duplicate(db, owner_id=settings.owner_id, text=document.text)
+        duplicate = preview_duplicate(db, owner_id=tenancy.owner_id(), text=document.text)
         return {
             "action": "propose_manual_requirement",
             "source": document.origin,
@@ -77,7 +78,7 @@ def check_manual_intake(run_key: str = "") -> dict[str, object]:
         query = (
             db.query(RecentRun)
             .filter(
-                RecentRun.owner_id == settings.owner_id,
+                RecentRun.owner_id == tenancy.owner_id(),
                 RecentRun.run_key.like("manual_intake:%"),
             )
             .order_by(RecentRun.created_at.desc())

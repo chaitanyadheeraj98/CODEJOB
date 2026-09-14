@@ -4,6 +4,7 @@ from app.mcp_server.tools import untrusted
 from app.config import settings
 from app.db import SessionLocal
 from app.external_feeds.models import ExternalFeedSource, ExternalOpportunity, ExternalScrapeRun
+from app import tenancy
 
 
 def list_external_opportunities(limit: int = 10) -> dict[str, object]:
@@ -14,20 +15,20 @@ def list_external_opportunities(limit: int = 10) -> dict[str, object]:
     """
     db = SessionLocal()
     try:
-        total = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == settings.owner_id).count()
+        total = db.query(ExternalOpportunity).filter(ExternalOpportunity.owner_id == tenancy.owner_id()).count()
         rows = (
             db.query(ExternalOpportunity)
-            .filter(ExternalOpportunity.owner_id == settings.owner_id)
+            .filter(ExternalOpportunity.owner_id == tenancy.owner_id())
             .order_by(ExternalOpportunity.created_at.desc())
             .limit(max(1, min(limit, 25)))
             .all()
         )
         sources = (
-            db.query(ExternalFeedSource).filter(ExternalFeedSource.owner_id == settings.owner_id).all()
+            db.query(ExternalFeedSource).filter(ExternalFeedSource.owner_id == tenancy.owner_id()).all()
         )
         latest_run = (
             db.query(ExternalScrapeRun)
-            .filter(ExternalScrapeRun.owner_id == settings.owner_id)
+            .filter(ExternalScrapeRun.owner_id == tenancy.owner_id())
             .order_by(ExternalScrapeRun.started_at.desc())
             .first()
         )

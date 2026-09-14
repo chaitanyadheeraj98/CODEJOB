@@ -17,7 +17,17 @@ from app import models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which sets `.disabled = True`
+    # on every logger already configured - the whole `app.*` tree included.
+    #
+    # Harmless for the `alembic upgrade head` that runs on boot, because that
+    # is its own process. Not harmless in the test suite, where migrations run
+    # in-process: from the first migration test onwards every application
+    # logger is silently dead for the rest of the run. A test asserting that a
+    # log *contains* something then fails confusingly, and - far worse - a test
+    # asserting a secret is *absent* from the log passes because there is no
+    # log at all.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata

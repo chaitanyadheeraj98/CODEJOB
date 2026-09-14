@@ -1,16 +1,132 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
+from tempfile import TemporaryDirectory
 from typing import Any
+from uuid import uuid4
 
 from app.db import SessionLocal
+from app.tenancy import owner_scoped
 from app.jobs.progress import update_job_progress
 from app.schemas import AutomationRunRequest
 
 logger = logging.getLogger(__name__)
 
 
+@owner_scoped
+def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from app import tenancy
+    from app.config import settings
+    from app.services.chat_service import ChatService
+    from app.services.telegram_chat_service import current_session
+    from app.services.telegram_chart_render import render_chart_png_bounded
+    from app.services.telegram_format import (
+        EMAIL_PROPOSAL_TOOLS,
+        email_proposal,
+        format_answer,
+        unicode_chart,
+    )
+    from app.telegram_bot import TelegramTransport
+
+    correlation_id = uuid4().hex
+    response = ""
+    proposal_replies: list[tuple[str, list[list[dict[str, str]]] | None]] = []
+    chart_replies: list[tuple[str, str]] = []
+    status = "ok"
+    db = SessionLocal()
+    try:
+        session = current_session(db, tenancy.owner_id(), chat_id)
+        result = asyncio.run(ChatService().complete_message(db, session.id, text, model=None))
+        if result.failure_code in {"budget_exhausted", "tool_budget_exhausted"}:
+            response = "That took too long and I stopped. Try narrowing the question."
+            status = "timeout"
+        else:
+            response = format_answer(result.assistant_text or "Something went wrong on my side.")
+            status = "ok" if result.assistant_text else "failed"
+            proposal_replies = [
+                rendered
+                for row in result.tool_rows
+                # Both email proposal tools. The renderer already handles either
+                # payload; naming only the reply tool here meant a composed
+                # email produced prose promising a card and no card - the model
+                # then apologises and "tries again", which cannot help.
+                if row.tool_name in EMAIL_PROPOSAL_TOOLS
+                for rendered in [email_proposal(row.content, row.id)]
+                if rendered is not None
+            ]
+            chart_replies = [
+                (row.content, rendered)
+                for row in result.tool_rows
+                if row.tool_name == "get_chart"
+                for rendered in [unicode_chart(row.content)]
+                if rendered is not None
+            ]
+    except HTTPException as exc:
+        if exc.status_code == 503:
+            response = "I'm at capacity right now — send that again in a moment."
+            status = "capacity"
+        elif exc.status_code == 422:
+            response = "That message is too long for me to read — try splitting it."
+            status = "invalid"
+        else:
+            response = f"Something went wrong on my side. Reference: <code>{correlation_id}</code>"
+            status = "failed"
+    except (TimeoutError, asyncio.TimeoutError):
+        response = "That took too long and I stopped. Try narrowing the question."
+        status = "timeout"
+    except Exception as exc:
+        logger.warning(
+            "telegram_chat_turn_failed correlation_id=%s chat_id=%s error_type=%s",
+            correlation_id,
+            chat_id,
+            type(exc).__name__,
+        )
+        response = f"Something went wrong on my side. Reference: <code>{correlation_id}</code>"
+        status = "failed"
+    finally:
+        db.close()
+
+    try:
+        transport = TelegramTransport(settings.telegram_bot_token)
+        transport.edit_message(chat_id, message_id, response)
+        for proposal_text, keyboard in proposal_replies:
+            transport.send_message(chat_id, proposal_text, inline_keyboard=keyboard)
+        for chart_content, chart_text in chart_replies:
+            if settings.telegram_chart_png_enabled and chart_text.startswith("<pre>"):
+                try:
+                    with TemporaryDirectory() as directory:
+                        path = __import__("pathlib").Path(directory) / "chart.png"
+                        render_chart_png_bounded(
+                            chart_content,
+                            path,
+                            settings.telegram_chart_render_timeout_seconds,
+                        )
+                        transport.send_photo(chat_id, path.read_bytes())
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "telegram_chart_png_failed correlation_id=%s chat_id=%s error_type=%s",
+                        correlation_id,
+                        chat_id,
+                        type(exc).__name__,
+                    )
+            transport.send_message(chat_id, chart_text)
+    except Exception as exc:
+        logger.warning(
+            "telegram_chat_reply_failed correlation_id=%s chat_id=%s error_type=%s",
+            correlation_id,
+            chat_id,
+            type(exc).__name__,
+        )
+        return {"status": "delivery_failed", "correlation_id": correlation_id}
+    return {"status": status, "correlation_id": correlation_id}
+
+
+@owner_scoped
 def run_generate_embedding_job(*, record_type: str, record_id: int) -> dict[str, Any]:
     from app.config import settings
     from app.models import AppTSApplication, RecruiterEmail
@@ -42,6 +158,7 @@ def run_generate_embedding_job(*, record_type: str, record_id: int) -> dict[str,
         db.close()
 
 
+@owner_scoped
 def run_scheduled_task_job(*, task_id: int) -> dict[str, Any]:
     """Execute one scheduled task run.
 
@@ -156,6 +273,7 @@ def _mark_failed(run_key: str, exc: Exception) -> None:
         db.close()
 
 
+@owner_scoped
 def run_gmail_sync_job(*, run_key: str, sync_batch_id: str) -> dict[str, Any]:
     from app import main
 
@@ -200,6 +318,7 @@ def run_gmail_sync_job(*, run_key: str, sync_batch_id: str) -> dict[str, Any]:
         db.close()
 
 
+@owner_scoped
 def run_nvoids_sync_job(
     *, run_key: str, max_items: int, criteria: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -279,6 +398,7 @@ def run_nvoids_sync_job(
         db.close()
 
 
+@owner_scoped
 def run_manual_intake_job(*, run_key: str, text: str) -> dict[str, Any]:
     """Ingest one pasted requirement.
 
@@ -320,6 +440,7 @@ def run_manual_intake_job(*, run_key: str, text: str) -> dict[str, Any]:
         db.close()
 
 
+@owner_scoped
 def run_retry_selected_messages_job(*, run_key: str, external_message_ids: list[str]) -> dict[str, Any]:
     from app import main
 
@@ -352,6 +473,7 @@ def run_retry_selected_messages_job(*, run_key: str, external_message_ids: list[
         db.close()
 
 
+@owner_scoped
 def run_automation_job(*, run_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     from app import main
 
@@ -386,3 +508,42 @@ def run_automation_job(*, run_key: str, payload: dict[str, Any] | None = None) -
         raise
     finally:
         db.close()
+
+
+@owner_scoped
+def run_gmail_history_job(*, notification_history_id: str = "") -> dict[str, Any]:
+    """Drain one mailbox's Gmail history after a push notification.
+
+    Thin on purpose. Everything that decides what changed lives in
+    `gmail_pubsub_service`; what belongs to the job layer is the owner scope,
+    the retry policy, and returning something an operator can read in the RQ
+    dashboard.
+
+    `owner_id` is supplied by the decorator from the enqueue call, never from
+    the Pub/Sub payload - the subscriber resolves a mailbox address to an owner
+    against the credential table and enqueues that. A notification cannot name
+    the tenant it writes to.
+
+    No `job_id` derived from the notification. Several notifications can
+    legitimately coalesce into one history range, and deduplicating on the
+    number would drop drains that were needed. The per-owner history lock, the
+    committed cursor and the `UNIQUE(owner_id, external_message_id)` constraint
+    already make a repeat harmless.
+    """
+    from app.services import gmail_pubsub_service
+
+    outcome = gmail_pubsub_service.process_history(
+        _owner_id_in_scope(), notification_history_id
+    )
+    return {
+        "status": "ok" if not outcome.reason else outcome.reason,
+        "processed": outcome.processed,
+        "captured": outcome.captured,
+        "recovered": outcome.recovered,
+    }
+
+
+def _owner_id_in_scope() -> str:
+    from app import tenancy
+
+    return tenancy.owner_id()

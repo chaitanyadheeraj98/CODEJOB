@@ -336,6 +336,21 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
     buildBody: (fields) => ({
       body: fields.body,
       subject: fields.subject,
+      // The envelope the card showed, sent explicitly. Omitting these would
+      // let the server fall back to the thread's own addresses, so a card
+      // reading "To: the employer" could still deliver to the recruiter.
+      // A card drawn before this field existed sends null and keeps the old
+      // behaviour.
+      to: fields.to ?? null,
+      cc: fields.cc ?? null,
+      // Its own field, not folded into document_ids: a resume lives in a
+      // different store and its id resolves to nothing there.
+      resume_id: typeof fields.resume_id === 'number' ? fields.resume_id : 0,
+      // True only because the card demanded an acknowledgement and got one -
+      // the confirm button does not enable otherwise. The server grades the
+      // addresses itself and refuses regardless of what this says, so this
+      // carries the user's intent, not the permission.
+      confirm_new_recipients: fields.requires_recipient_confirmation === true,
       // Ids, never the names the card displays. The server resolves them again
       // at send time, so a document deleted between proposal and click fails
       // the send rather than silently matching a different file.
@@ -345,15 +360,72 @@ export const PROPOSAL_HANDLERS: Record<string, ProposalHandler> = {
     summary: (fields) => {
       const attached = strings(fields.document_names)
       return [
+        // The warning sits above the address it is about. A note underneath a
+        // row the reader has already accepted is a note they have already
+        // skipped.
+        ...(fields.to_changed
+          ? [['Heads up', 'This goes to a different address than the thread.'] as [string, string]]
+          : []),
+        ...(strings(fields.unknown_recipients).length
+          ? [[
+            'Not in your records',
+            strings(fields.unknown_recipients).join(', '),
+          ] as [string, string]]
+          : []),
         ['To', text(fields.to)],
-        ['CC', text(fields.cc)],
+        ['CC', fields.cc_changed && !text(fields.cc) ? 'none' : text(fields.cc)],
         ['Subject', text(fields.subject)],
         // Above the body, which can run long: the files leaving with the mail
         // are the part of this card that is worth reading twice.
-        ...(attached.length ? [['Attachments', attached.join(', ')] as [string, string]] : []),
+        ...(attached.length || text(fields.resume_name)
+          ? [[
+            'Attachments',
+            [...attached, text(fields.resume_name)].filter(Boolean).join(', '),
+          ] as [string, string]]
+          : []),
         ['Body', text(fields.body)],
       ]
     },
+  },
+  propose_new_email: {
+    // A fixed path, not a template: this message names no candidate, so there
+    // is no id in the URL and nothing for a malformed payload to aim at.
+    endpoint: '/chat/new-email',
+    method: 'POST',
+    buildBody: (fields) => ({
+      to: fields.to,
+      cc: fields.cc ?? '',
+      subject: fields.subject,
+      body: fields.body,
+      document_ids: numbers(fields.document_ids),
+      // Its own field, not folded into document_ids: a resume lives in a
+      // different store and its id resolves to nothing there.
+      resume_id: typeof fields.resume_id === 'number' ? fields.resume_id : 0,
+      confirm_new_recipients: fields.requires_recipient_confirmation === true,
+    }),
+    confirmLabel: () => 'Send Email',
+    summary: (fields) => {
+      const attached = strings(fields.document_names)
+      return [
+        // Said first and always: this one leaves no trail in an existing
+        // thread, so there is nothing familiar for the reader to anchor on.
+        ['Heads up', 'This starts a new email thread.'],
+        ...(strings(fields.unknown_recipients).length
+          ? [['Not in your records', strings(fields.unknown_recipients).join(', ')] as [string, string]]
+          : []),
+        ['To', text(fields.to)],
+        ['CC', text(fields.cc)],
+        ['Subject', text(fields.subject)],
+        ...(attached.length || text(fields.resume_name)
+          ? [[
+            'Attachments',
+            [...attached, text(fields.resume_name)].filter(Boolean).join(', '),
+          ] as [string, string]]
+          : []),
+        ['Body', text(fields.body)],
+      ]
+    },
+    pendingNotice: 'Nothing has been sent yet. The email goes only when you click Send Email.',
   },
   propose_scheduled_task: {
     // Client-side endpoint table, keyed by the operation the tool chose. The

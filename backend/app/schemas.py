@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import re
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 from zoneinfo import available_timezones
 
 from pydantic import AliasChoices, BaseModel, Field, computed_field, field_validator, model_validator
@@ -116,11 +117,46 @@ class ManualPremiumContactRequest(BaseModel):
 class ChatSendReplyRequest(BaseModel):
     body: str = Field(min_length=1, max_length=20000)
     subject: str | None = Field(default=None, max_length=998)
+    # Recipient overrides. `None` means "keep what the thread already has", and
+    # `""` on `cc` means "send with no CC at all" - the two must stay distinct,
+    # because dropping the CC is something users ask for and an omitted field
+    # is not a request to drop anything. Validated in the route, never here:
+    # these arrive from a confirmation card the model populated.
+    to: str | None = Field(default=None, max_length=320)
+    cc: str | None = Field(default=None, max_length=2000)
+    # Set by the user's second click, never by the model. An address the owner
+    # has no record of is still sendable - it just costs a deliberate act, the
+    # same shape as `ApproveSendRequest.confirm_same_source_additional_send`.
+    confirm_new_recipients: bool = False
     # Ids of stored candidate documents to attach. Ids rather than names: the
     # confirmation card shows the user the file names it resolved, and a name
     # matched twice - once by the model, once by the server - is a name that can
     # resolve to two different files.
     document_ids: list[int] = Field(default_factory=list, max_length=20)
+    # A resume lives in its own store, so it gets its own field here too.
+    resume_id: int = Field(default=0, ge=0)
+
+
+class ChatNewEmailRequest(BaseModel):
+    """A message that starts its own thread rather than answering one.
+
+    Its own model rather than a flag on the reply request: the two differ in
+    what they *require*. Here `to` and `subject` are mandatory, because there is
+    no thread to take them from - which is the whole difference between
+    composing and replying.
+    """
+
+    to: str = Field(min_length=3, max_length=320)
+    cc: str = Field(default="", max_length=2000)
+    subject: str = Field(min_length=1, max_length=998)
+    body: str = Field(min_length=1, max_length=20000)
+    document_ids: list[int] = Field(default_factory=list, max_length=20)
+    # A resume lives in its own store, so it is its own field. Sending its id
+    # in `document_ids` would resolve nothing, which is exactly the failure the
+    # field exists to stop.
+    resume_id: int = Field(default=0, ge=0)
+    # Set by the user's second click, never by the model.
+    confirm_new_recipients: bool = False
 
 
 class ManualRequirementPreviewRequest(BaseModel):
@@ -283,6 +319,7 @@ class SettingsRequest(BaseModel):
     feature_email_tracking_enabled: bool = False
     feature_reply_inbox_enabled: bool = False
     feature_label_tracking_enabled: bool = False
+    feature_application_watches_enabled: bool = False
     feature_applications_enabled: bool = False
     feature_application_automation_enabled: bool = False
     feature_application_outreach_drafts_enabled: bool = False
@@ -743,6 +780,7 @@ class CanonicalEntityTaxonomyEntryResponse(BaseModel):
     occurrence_count: int
     embedding_status: str
     status: str
+    suppressed: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -950,6 +988,11 @@ class SettingsBootstrapResponse(BaseModel):
     # Without this the page exists but nothing links to it, and temp157 §8.1
     # requires the user to be able to see every scheduled task.
     scheduling_enabled: bool = False
+    # E3 / §11.4. Surfaced the same way, so the dashboard can hide the taxonomy
+    # cards exactly when the deployment has switched user editing off. The
+    # endpoints 404 regardless; this is what stops the UI offering a door that
+    # is not there.
+    user_taxonomy_enabled: bool = True
     gmail_requirement_groups: list["GmailRequirementGroupResponse"] = Field(default_factory=list)
     resumes: list[ResumeResponse] = Field(default_factory=list)
     attachments: list[AttachmentAssetResponse] = Field(default_factory=list)
@@ -1196,10 +1239,179 @@ class EmailResponse(BaseModel):
 
 class GmailStatusResponse(BaseModel):
     configured: bool
+    # True for a refreshable credential too. It means "this app can act on the
+    # mailbox without asking the user", not "the access token is fresh".
     authenticated: bool
     token_path: str
     last_sync_at: datetime | None
     detail: str
+    # One of gmail_client.GMAIL_STATE_*. Lets the UI distinguish "reconnect" from
+    # "nothing connected yet", which two booleans could not.
+    state: str = "not_configured"
+    # The address that consented. Replaces showing a file path as the account.
+    account_email: str = ""
+
+
+class LoginStartResponse(BaseModel):
+    authorization_url: str
+    state: str
+
+
+class AuthUserResponse(BaseModel):
+    """What the route guard is allowed to know. No token, no session id."""
+
+    email: str
+    display_name: str = ""
+    is_admin: bool = False
+    owner_id: str
+
+
+class AccountDeactivationResponse(BaseModel):
+    deactivated_at: datetime
+    purge_after: datetime
+    sessions_revoked: int
+    jobs_stopped: int
+
+
+class AccountDeletionRequest(BaseModel):
+    """§13: a typed confirmation, not a checkbox.
+
+    The user types their own email address. A fixed phrase like "DELETE" is
+    typed without reading; an address is specific to the account in front of
+    you, which is the point when someone is signed in to two of them.
+    """
+
+    confirm_email: str
+
+
+class AdminUserResponse(BaseModel):
+    """What an admin may see about another account.
+
+    Identifiers, state and timings only. No message content, no mailbox
+    contents, no token material - see temp176 §12.1. An admin page that renders
+    other people's mail is the highest-value target in the product.
+    """
+
+    id: int
+    email: str
+    display_name: str = ""
+    owner_id: str
+    is_admin: bool = False
+    disabled: bool = False
+    created_at: datetime | None = None
+    last_login_at: datetime | None = None
+    gmail_connected: bool = False
+    gmail_email: str = ""
+
+
+class AdminUserUpdateRequest(BaseModel):
+    """Only these two fields, and only from an admin-authenticated route."""
+
+    disabled: bool | None = None
+    is_admin: bool | None = None
+
+
+class TaxonomyPublishResponse(BaseModel):
+    """§14 H2: the base artefact, returned for review and written to nobody.
+
+    `files` is keyed by the name each payload would be committed as, so what an
+    admin reads here is byte-for-byte what the developer puts in the repo. The
+    endpoint deliberately has no write side: publishing to everyone is a deploy,
+    reviewable and revertible, and an API call that changed what 100 accounts
+    see would be none of those things.
+    """
+
+    owner_id: str
+    generated_at: datetime
+    counts: dict[str, int] = {}
+    files: dict[str, object] = {}
+
+
+class ObservabilityPercentiles(BaseModel):
+    """Null when no turn in the window carried the metric, never zero."""
+
+    p50: int | None = None
+    p95: int | None = None
+
+
+class ObservabilityHourBucket(BaseModel):
+    hour: datetime
+    turns: int = 0
+
+
+class ObservabilityFailureCode(BaseModel):
+    code: str
+    turns: int = 0
+
+
+class ObservabilityUser(BaseModel):
+    """One account's slice of the same numbers. §12.2's "for me" case.
+
+    `owner_id` only, never the email. An admin can map it through
+    `/admin/users`, and the fewer places an account's address is rendered, the
+    fewer places it leaks from.
+    """
+
+    owner_id: str
+    turns: int = 0
+    failed: int = 0
+    admission_rejected: int = 0
+    duration_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+    time_to_first_token_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+
+
+class ObservabilityResponse(BaseModel):
+    """§12.1: identifiers, timings, counts and error codes. Nothing else.
+
+    The model is the control, not the comment. A response model emits exactly
+    the fields declared here, so a column that finds its way into the service's
+    output cannot reach the page without someone adding it here first - which
+    is the moment to ask whether it is content.
+    """
+
+    window_hours: int
+    since: datetime
+    until: datetime
+    #: True when the row cap bit, so a partial percentile is never read as a
+    #: complete one.
+    truncated: bool = False
+    turns: int = 0
+    failed: int = 0
+    admission_rejected: int = 0
+    duration_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+    time_to_first_token_ms: ObservabilityPercentiles = ObservabilityPercentiles()
+    turns_per_hour: list[ObservabilityHourBucket] = []
+    failure_codes: list[ObservabilityFailureCode] = []
+    per_user: list[ObservabilityUser] = []
+
+
+class GmailConnectionResponse(BaseModel):
+    """Deliberately carries no token material, encrypted or otherwise.
+
+    There is no field here a future edit could accidentally fill with a token,
+    which is the point - a test asserts the serialised body contains none.
+    """
+
+    connected: bool = False
+    state: str = "not_connected"
+    google_email: str = ""
+    expires_at: datetime | None = None
+    connected_at: datetime | None = None
+    last_refreshed_at: datetime | None = None
+    revoked: bool = False
+    last_error: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    detail: str = ""
+    # Push delivery. Derived values only - no topic or subscription name, no
+    # service-account detail, and no mailbox history id. The first two describe
+    # the deployment rather than the account; the third is a position in
+    # someone's mailbox and has no use in a browser.
+    inbox_delivery: str = "disabled"
+    watch_expires_at: datetime | None = None
+    last_notification_at: datetime | None = None
+    last_event_processed_at: datetime | None = None
+    consumer_online: bool = False
+    watch_error: str = ""
 
 
 class AIStatusResponse(BaseModel):
@@ -1391,9 +1603,46 @@ class ChatTelemetryResponse(BaseModel):
     top_failure_code: str | None = None
 
 
+class OllamaCredentialRequest(BaseModel):
+    api_key: str = Field(min_length=8, max_length=4096)
+    base_url: str = Field(default="", max_length=255)
+
+    @field_validator("api_key", "base_url", mode="before")
+    @classmethod
+    def strip_ollama_credentials(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_ollama_base_url(cls, value: str) -> str:
+        if not value:
+            return value
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Base URL must be an HTTP(S) URL without credentials, query, or fragment.")
+        return value.rstrip("/")
+
+
+class OllamaCredentialResponse(BaseModel):
+    provider: Literal["ollama"] = "ollama"
+    configured: bool
+    masked_api_key: str | None = None
+    base_url: str = ""
+
+
 class ChatStatusResponse(BaseModel):
     enabled: bool
     ollama_running: bool
+    ollama_configured: bool = False
+    ollama_masked_api_key: str | None = None
+    ollama_base_url: str = ""
     ollama_last_error: str | None = None
     ollama_last_success_at: datetime | None = None
     chat_last_error: str | None = None
@@ -1570,6 +1819,10 @@ class ConversationSummaryResponse(BaseModel):
     id: int
     root_recruiter_email_id: int | None
     origin: str = "sent"
+    # The watch that pulled a `watch` conversation in, named so the badge can
+    # say which one. Often not the sender: a domain watch matches any
+    # participant, so a stranger's mail arrives under a company you follow.
+    watch_value: str | None = None
     labels: list[str] = Field(default_factory=list)
     recruiter: str
     recruiter_email: str | None = None
@@ -2273,6 +2526,9 @@ class ApplicationListResponse(BaseModel):
     next_cursor: int | None
     has_next: bool
     total: int
+    watch_count: int = 0
+    watch_limit: int = 0
+    watch_limit_reached: bool = False
 
 
 class RecordSourceResponse(BaseModel):
@@ -2962,6 +3218,41 @@ class TelegramStatusResponse(BaseModel):
     alerts_enabled: bool
     authorized_chats: int
     detail: str
+
+
+class TelegramLinkResponse(BaseModel):
+    linked: bool
+    chat_masked: str | None = None
+    telegram_username: str = ""
+    linked_at: datetime | None = None
+    alerts_enabled: bool = True
+    pin_set: bool = False
+    bot_username: str = ""
+    pending_code_expires_at: datetime | None = None
+
+
+class TelegramLinkCodeResponse(BaseModel):
+    deep_link: str
+    expires_at: datetime
+
+
+class TelegramLinkSettingsRequest(BaseModel):
+    alerts_enabled: bool | None = None
+    action_pin: str | None = Field(default=None, max_length=6)
+
+    @field_validator("action_pin")
+    @classmethod
+    def validate_action_pin(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if value and not re.fullmatch(r"\d{4,6}", value):
+            raise ValueError("Action PIN must contain 4 to 6 digits.")
+        return value
+
+
+class TelegramUnlinkResponse(BaseModel):
+    linked: Literal[False] = False
 
 
 SettingsBootstrapResponse.model_rebuild()

@@ -20,6 +20,16 @@ export type SidebarProps = {
   // it is an internal calibration tool, not a feature.
   activePage: 'assistant' | 'run_queue' | 'manual_intake' | 'needs_review' | 'failed_mapping' | 'recent_runs' | 'sent_items' | 'inbox' | 'labels' | 'premium_numbers' | 'resume_tracking' | 'application_tracking' | 'relationship_labeling' | 'scheduled_tasks' | 'scheduled_review' | 'settings'
   onNavigate: (section: SidebarProps['activePage']) => void
+  /**
+   * Who is signed in, when sign-in is on at all.
+   *
+   * Absent means the backend has `feature_auth_enabled` off, and the rail must
+   * look exactly as it did before sign-in existed - no account block, and no
+   * sign-out offered for a session that does not exist.
+   */
+  account?: { email: string; isAdmin: boolean }
+  onSignOut?: () => void
+  signingOut?: boolean
 }
 
 export default function Sidebar({
@@ -38,6 +48,9 @@ export default function Sidebar({
   schedulingEnabled = false,
   activePage,
   onNavigate,
+  account,
+  onSignOut,
+  signingOut = false,
 }: SidebarProps) {
   // Remembered: someone who works with the rail closed should not reopen it on
   // every reload, and someone who never touches it never sees this state.
@@ -138,6 +151,23 @@ export default function Sidebar({
           Settings
         </button>
         <button className="navItem" type="button">Help Center</button>
+        {account ? (
+          <div className="accountBlock">
+            {/* The address, not a display name. Running two test accounts side
+                by side, "which account am I looking at" is the question this
+                answers, and only the address answers it unambiguously. */}
+            <span className="accountEmail" title={account.email}>{account.email}</span>
+            {account.isAdmin ? <span className="accountRole">Admin</span> : null}
+            <button
+              className="signOutBtn"
+              type="button"
+              onClick={onSignOut}
+              disabled={signingOut}
+            >
+              {signingOut ? 'Signing out...' : 'Sign out'}
+            </button>
+          </div>
+        ) : null}
       </nav>
       </aside>
     </>

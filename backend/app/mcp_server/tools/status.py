@@ -4,6 +4,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import AttachmentAsset, GmailRequirementGroup, UserSettings
 from app.runtime_state import runtime_state
+from app import tenancy
 
 
 def get_ai_status() -> dict[str, object]:
@@ -27,18 +28,18 @@ def get_settings_summary() -> dict[str, object]:
     """Return an owner-scoped, non-secret summary of saved automation settings."""
     db = SessionLocal()
     try:
-        row = db.query(UserSettings).filter(UserSettings.owner_id == settings.owner_id).first()
+        row = db.query(UserSettings).filter(UserSettings.owner_id == tenancy.owner_id()).first()
         if row is None:
             return {"error": "Settings not initialized"}
         attachments = (
             db.query(AttachmentAsset)
-            .filter(AttachmentAsset.owner_id == settings.owner_id)
+            .filter(AttachmentAsset.owner_id == tenancy.owner_id())
             .order_by(AttachmentAsset.created_at.desc())
             .all()
         )
         groups = (
             db.query(GmailRequirementGroup)
-            .filter(GmailRequirementGroup.owner_id == settings.owner_id)
+            .filter(GmailRequirementGroup.owner_id == tenancy.owner_id())
             .order_by(GmailRequirementGroup.display_name.asc())
             .all()
         )

@@ -62,6 +62,7 @@ from app.services.resume_render_service import (
     section_digest,
     split_sections,
 )
+from app import tenancy
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ EXPORT_MEDIA_TYPES = {
 def _draft_or_404(db: Session, draft_id: int) -> ResumeDraft:
     draft = (
         db.query(ResumeDraft)
-        .filter(ResumeDraft.owner_id == settings.owner_id, ResumeDraft.id == draft_id)
+        .filter(ResumeDraft.owner_id == tenancy.owner_id(), ResumeDraft.id == draft_id)
         .first()
     )
     if draft is None:
@@ -92,7 +93,7 @@ def _draft_or_404(db: Session, draft_id: int) -> ResumeDraft:
 def _profile_or_404(db: Session, profile_id: int) -> ResumeFormatProfile:
     profile = (
         db.query(ResumeFormatProfile)
-        .filter(ResumeFormatProfile.owner_id == settings.owner_id, ResumeFormatProfile.id == profile_id)
+        .filter(ResumeFormatProfile.owner_id == tenancy.owner_id(), ResumeFormatProfile.id == profile_id)
         .first()
     )
     if profile is None:
@@ -111,7 +112,7 @@ def _live_variant_codes(db: Session, draft_ids: list[int | None]) -> dict[int, s
         return {}
     rows = (
         db.query(ResumeAsset.id)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id.in_(wanted))
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id.in_(wanted))
         .all()
     )
     return {row.id: resume_variant_code(row.id) for row in rows}
@@ -167,7 +168,7 @@ def _default_spec(db: Session) -> ResumeFormatSpec:
     default = (
         db.query(ResumeFormatProfile)
         .filter(
-            ResumeFormatProfile.owner_id == settings.owner_id,
+            ResumeFormatProfile.owner_id == tenancy.owner_id(),
             ResumeFormatProfile.is_default.is_(True),
         )
         .first()
@@ -191,7 +192,7 @@ def _clear_other_defaults(db: Session, keep_id: int) -> None:
     for other in (
         db.query(ResumeFormatProfile)
         .filter(
-            ResumeFormatProfile.owner_id == settings.owner_id,
+            ResumeFormatProfile.owner_id == tenancy.owner_id(),
             ResumeFormatProfile.is_default.is_(True),
             ResumeFormatProfile.id != keep_id,
         )
@@ -210,7 +211,7 @@ def _download_name(draft: ResumeDraft, extension: str) -> str:
 def list_drafts(db: Session = Depends(get_db)) -> list[ResumeDraftSummary]:
     drafts = (
         db.query(ResumeDraft)
-        .filter(ResumeDraft.owner_id == settings.owner_id)
+        .filter(ResumeDraft.owner_id == tenancy.owner_id())
         .order_by(ResumeDraft.updated_at.desc(), ResumeDraft.id.desc())
         .all()
     )
@@ -231,7 +232,7 @@ def create_draft(payload: ResumeDraftCreateRequest, db: Session = Depends(get_db
     if payload.source_resume_id is not None:
         source = (
             db.query(ResumeAsset)
-            .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.id == payload.source_resume_id)
+            .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.id == payload.source_resume_id)
             .first()
         )
         if source is None:
@@ -243,7 +244,7 @@ def create_draft(payload: ResumeDraftCreateRequest, db: Session = Depends(get_db
             name = f"{code} copy" if not source.variant_label else f"{code} {source.variant_label}"
 
     draft = ResumeDraft(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         name=(name or "Untitled draft")[:200],
         source_resume_id=payload.source_resume_id,
         content_markdown=_checked_content(content),
@@ -490,7 +491,7 @@ def publish_draft(
     file_name = f"{safe[:120]}.{payload.fmt}"
     clash = (
         db.query(ResumeAsset)
-        .filter(ResumeAsset.owner_id == settings.owner_id, ResumeAsset.file_name == file_name)
+        .filter(ResumeAsset.owner_id == tenancy.owner_id(), ResumeAsset.file_name == file_name)
         .first()
     )
     if clash is not None:
@@ -533,7 +534,7 @@ def publish_draft(
 def list_format_profiles(db: Session = Depends(get_db)) -> list[ResumeFormatProfileResponse]:
     profiles = (
         db.query(ResumeFormatProfile)
-        .filter(ResumeFormatProfile.owner_id == settings.owner_id)
+        .filter(ResumeFormatProfile.owner_id == tenancy.owner_id())
         .order_by(ResumeFormatProfile.is_default.desc(), ResumeFormatProfile.id.desc())
         .all()
     )
@@ -556,7 +557,7 @@ def create_format_profile(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not name.strip():
             raise HTTPException(status_code=400, detail="A profile needs a name")
-        profile = ResumeFormatProfile(owner_id=settings.owner_id, name=name.strip()[:120],
+        profile = ResumeFormatProfile(owner_id=tenancy.owner_id(), name=name.strip()[:120],
                                       source_file_name="", spec_json=spec.model_dump_json(), is_default=bool(make_default))
         db.add(profile)
         db.flush()
@@ -586,7 +587,7 @@ def create_format_profile(
 
     spec = resume_format_profile_service.spec_from_sample(sample, file.filename)
     profile = ResumeFormatProfile(
-        owner_id=settings.owner_id,
+        owner_id=tenancy.owner_id(),
         name=(name.strip() or Path(file.filename).stem)[:120],
         source_file_name=file.filename[:255],
         spec_json=spec.model_dump_json(),
@@ -644,7 +645,7 @@ def _export_spec(db: Session, draft: ResumeDraft, profile_id: int | None) -> Res
     if draft.format_profile_id is not None:
         profile = db.query(ResumeFormatProfile).filter(
             ResumeFormatProfile.id == draft.format_profile_id,
-            ResumeFormatProfile.owner_id == settings.owner_id,
+            ResumeFormatProfile.owner_id == tenancy.owner_id(),
         ).first()
         if profile is not None:
             return _spec_of(profile)

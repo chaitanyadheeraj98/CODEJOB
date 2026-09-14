@@ -20,3 +20,6 @@ raw/
 dashboard/scratch/
 .impeccable/
 .serena/
+
+# Agent scratch space (patches, pytest basetemp, run logs)
+.tmp/

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import json
 import logging
 import threading
 from typing import Any, Callable
@@ -9,8 +10,19 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import RecruiterEmail, SyncRun, UserSettings
-from app.schemas import ApproveSendRequest, AutomationRunResponse, EmailResponse, RejectRequest
+from app import tenancy
+from app.config import settings
+from app.models import ChatMessage, ChatSession, RecruiterEmail, SyncRun, UserSettings
+from app.schemas import (
+    ApproveSendRequest,
+    AutomationRunResponse,
+    ChatNewEmailRequest,
+    ChatSendReplyRequest,
+    EmailResponse,
+    RejectRequest,
+)
+from app.services import account_service, telegram_chat_service, telegram_link_service
+from app.services.telegram_format import EMAIL_PROPOSAL_TOOLS, escape
 from app.services.telegram_runtime import TelegramRuntimeState
 from app.telegram_bot import TelegramReply
 
@@ -35,10 +47,14 @@ class TelegramRuntimeDeps:
     get_candidate_review: Callable[[int, Session], EmailResponse]
     approve_and_send: Callable[[int, ApproveSendRequest, Session], Any]
     reject_candidate: Callable[[int, RejectRequest, Session], Any]
-    owner_id: str
+    resolve_owner: Callable[[int], str | None]
+    redeem_link_code: Callable[[str, int, str, str], str | None]
     action_lock: threading.Lock
-    action_pin: Callable[[], str]
+    verify_action_pin: Callable[[str, str], bool]
     auth_ttl_minutes: Callable[[], int]
+    send_chat_reply: Callable[[int, ChatSendReplyRequest, Session], dict[str, object]] | None = None
+    send_chat_new_email: Callable[[ChatNewEmailRequest, Session], dict[str, object]] | None = None
+    record_proposal_outcome: Callable[..., ChatMessage] | None = None
 
 
 class TelegramRuntime:
@@ -79,6 +95,7 @@ class TelegramRuntime:
 
     @staticmethod
     def _tg_btn(text: str, data: str) -> dict[str, str]:
+        assert len(data.encode("utf-8")) <= 64
         return {"text": text, "callback_data": data}
 
     @classmethod
@@ -262,49 +279,56 @@ class TelegramRuntime:
         return None
 
     @classmethod
-    def _format_review_message(cls, candidate: EmailResponse) -> str:
+    def _format_review_message(cls, candidate: EmailResponse) -> TelegramReply:
         draft_preview, was_clipped = cls._truncate_text(candidate.draft_reply, limit=600)
         subject, _ = cls._truncate_text(candidate.subject, limit=160)
         routing_reason, _ = cls._truncate_text(candidate.routing_reason, limit=220)
         lines = [
-            f"Email ID: {candidate.id}",
-            f"From: {candidate.sender}",
-            f"Subject: {subject}",
+            f"<b>Email ID:</b> <code>{candidate.id}</code>",
+            f"<b>From:</b> {escape(candidate.sender)}",
+            f"<b>Subject:</b> {escape(subject)}",
         ]
         source_listing = cls._source_listing_url(candidate)
         if source_listing:
-            lines.append(f"Source Listing: {source_listing}")
+            lines.append(f"<b>Source Listing:</b> {escape(source_listing)}")
         if candidate.gmail_message_url:
-            lines.append(f"Open: {candidate.gmail_message_url}")
+            lines.append(f"<b>Open:</b> {escape(candidate.gmail_message_url)}")
         lines.extend(
             [
-                f"To: {candidate.recipient_email or '-'}",
-                f"CC: {candidate.cc_email or '-'}",
-                f"Routing: {candidate.routing_status} ({round(float(candidate.routing_confidence or 0.0) * 100)}%)",
-                f"Routing Reason: {routing_reason or 'No routing evidence captured yet.'}",
-                f"Resume: {candidate.resume_file_name or '-'}",
+                f"<b>To:</b> {escape(candidate.recipient_email or '-')}",
+                f"<b>CC:</b> {escape(candidate.cc_email or '-')}",
+                f"<b>Routing:</b> {escape(candidate.routing_status)} ({round(float(candidate.routing_confidence or 0.0) * 100)}%)",
+                f"<b>Routing Reason:</b> {escape(routing_reason or 'No routing evidence captured yet.')}",
+                f"<b>Resume:</b> {escape(candidate.resume_file_name or '-')}",
             ]
         )
         draft_source = cls._draft_source_label(candidate.draft_source)
         if candidate.draft_model:
             draft_source = f"{draft_source} ({candidate.draft_model})"
-        lines.append(f"Draft source: {draft_source}")
-        lines.append(f"Resume Context: {cls._resume_context_label(candidate.draft_resume_context_status)}")
+        lines.append(f"<b>Draft source:</b> {escape(draft_source)}")
+        lines.append(f"<b>Resume Context:</b> {escape(cls._resume_context_label(candidate.draft_resume_context_status))}")
         if candidate.draft_ai_error:
-            lines.append(f"AI fallback: {candidate.draft_ai_error}")
+            lines.append(f"<b>AI fallback:</b> {escape(candidate.draft_ai_error)}")
         if candidate.last_error:
-            lines.append(f"Last Error: {candidate.last_error}")
-        lines.append("Draft Preview:")
-        lines.append(draft_preview or "(empty)")
+            lines.append(f"<b>Last Error:</b> {escape(candidate.last_error)}")
+        lines.append("<b>Draft Preview:</b>")
+        lines.append(f"<pre>{escape(draft_preview or '(empty)')}</pre>")
         if was_clipped:
             lines.append("[truncated]")
-        return "\n".join(lines)
+        return TelegramReply(
+            text="\n".join(lines),
+            inline_keyboard=[
+                [
+                    cls._tg_btn("Approve", f"act:approve:{candidate.id}"),
+                    cls._tg_btn("Reject", f"act:reject:{candidate.id}"),
+                ],
+                [cls._tg_btn("Home", "menu:main:0")],
+            ],
+            html=True,
+        )
 
     def _action_authorized(self, pin: str | None) -> bool:
-        configured_pin = (self.deps.action_pin() or "").strip()
-        if not configured_pin:
-            return True
-        return bool(pin and pin == configured_pin)
+        return self.deps.verify_action_pin(tenancy.owner_id(), (pin or "").strip())
 
     def _session_remaining(self, chat_id: int) -> str:
         return TelegramRuntimeState.session_remaining(chat_id)
@@ -318,6 +342,27 @@ class TelegramRuntime:
         return "Action blocked. Run /auth <PIN> or provide pin=<PIN>."
 
     def handle_command(self, chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
+        command_line = text.strip()
+        parts = command_line.split(maxsplit=1)
+        cmd = parts[0].lower() if parts else ""
+        owner = self.deps.resolve_owner(chat_id)
+        if cmd == "/start" and len(parts) == 2:
+            linked_owner = self.deps.redeem_link_code(parts[1].strip(), chat_id, user_id, username)
+            if linked_owner is not None:
+                with tenancy.owner_scope(linked_owner):
+                    reply = self._main_menu_reply()
+                    reply.text = "Telegram account linked.\n\n" + reply.text
+                    return reply
+            if owner is None:
+                return "This link code is invalid or expired. Open Settings -> Integrations to link again."
+        if owner is None:
+            if cmd == "/start":
+                return "Open Settings -> Integrations to link this Telegram account."
+            return "This chat is not linked to an account."
+        with tenancy.owner_scope(owner):
+            return self._handle_command(chat_id, user_id, username, text)
+
+    def _handle_command(self, chat_id: int, user_id: str, username: str, text: str) -> str | TelegramReply:
         _ = user_id
         command_line = text.strip()
         if not command_line:
@@ -328,6 +373,19 @@ class TelegramRuntime:
         pending_mode = TelegramRuntimeState.get_pending_mode(chat_id)
         if pending_mode and not command_line.startswith("/"):
             TelegramRuntimeState.clear_pending_mode(chat_id)
+            if pending_mode.startswith("await_auth_pin|"):
+                _, callback_data, pending_message_id = pending_mode.split("|", 2)
+                if not self.deps.verify_action_pin(tenancy.owner_id(), command_line):
+                    TelegramRuntimeState.set_pending_mode(chat_id, pending_mode)
+                    return "Authentication failed: incorrect PIN."
+                TelegramRuntimeState.activate_session(chat_id, self.deps.auth_ttl_minutes())
+                return self._handle_callback(
+                    chat_id,
+                    user_id,
+                    username,
+                    callback_data,
+                    int(pending_message_id),
+                )
             if pending_mode == "await_setquery":
                 return self.handle_command(chat_id, user_id, username, f"/setquery {command_line}")
             if pending_mode == "await_setdate":
@@ -347,6 +405,9 @@ class TelegramRuntime:
             if pending_mode == "await_auth_pin":
                 return self.handle_command(chat_id, user_id, username, f"/auth {command_line}")
 
+        if not command_line.startswith("/") and settings.feature_telegram_chat_enabled:
+            return TelegramReply(text="Thinking…", enqueue_chat_text=command_line)
+
         parts = command_line.split()
         cmd = parts[0].lower()
         args, pin = self._extract_pin(parts[1:])
@@ -357,16 +418,14 @@ class TelegramRuntime:
 
         db = self.deps.session_factory()
         try:
+            if settings.feature_auth_enabled and account_service.is_owner_disabled(db, tenancy.owner_id()):
+                TelegramRuntimeState.clear_session(chat_id)
+                return "Account is deactivated."
             if cmd == "/auth":
                 if not args:
                     return "Usage: /auth <PIN>"
-                configured_pin = (self.deps.action_pin() or "").strip()
-                if not configured_pin:
-                    TelegramRuntimeState.activate_session(chat_id, self.deps.auth_ttl_minutes())
-                    logger.info("Telegram auth success chat_id=%s cmd=%s mode=no_configured_pin", chat_id, cmd)
-                    return f"Authenticated. Session expires in {self._session_remaining(chat_id)}."
                 supplied_pin = args[0].strip()
-                if supplied_pin != configured_pin:
+                if not self.deps.verify_action_pin(tenancy.owner_id(), supplied_pin):
                     logger.info("Telegram auth failed chat_id=%s cmd=%s reason=wrong_pin", chat_id, cmd)
                     return "Authentication failed: incorrect PIN."
                 TelegramRuntimeState.activate_session(chat_id, self.deps.auth_ttl_minutes())
@@ -377,6 +436,26 @@ class TelegramRuntime:
                 TelegramRuntimeState.clear_session(chat_id)
                 logger.info("Telegram logout chat_id=%s cmd=%s", chat_id, cmd)
                 return "Logged out. Action commands now require /auth <PIN> or pin=<PIN>."
+
+            if cmd == "/help":
+                chat_line = "Free-text assistant chat is enabled." if settings.feature_telegram_chat_enabled else "Free-text assistant chat is disabled."
+                return (
+                    f"{chat_line}\n"
+                    "Use /new to start a fresh assistant thread.\n"
+                    "Use /menu for MailOps commands, /auth for protected actions, and /disconnect to unlink this chat."
+                )
+
+            if cmd == "/new":
+                if not settings.feature_telegram_chat_enabled:
+                    return "Telegram assistant chat is disabled."
+                telegram_chat_service.reset_session(db, tenancy.owner_id(), chat_id)
+                db.commit()
+                return "Started a new assistant conversation."
+
+            if cmd == "/disconnect":
+                telegram_link_service.unlink(db, tenancy.owner_id())
+                db.commit()
+                return "Telegram account disconnected."
 
             if cmd == "/status":
                 gmail_configured, gmail_authenticated, gmail_detail = self.deps.gmail_auth_status()
@@ -495,17 +574,21 @@ class TelegramRuntime:
             if cmd == "/needs_review":
                 rows = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "needs_review")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "needs_review")
                     .order_by(RecruiterEmail.created_at.desc())
                     .limit(5)
                     .all()
                 )
                 count = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "needs_review")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "needs_review")
                     .count()
                 )
-                return f"Needs Review: {count}\nTop items:\n{self._format_candidate_lines(rows)}"
+                buttons = [self._tg_btn(f"Review #{row.id}", f"cmd:/review {row.id}") for row in rows]
+                return TelegramReply(
+                    text=f"Needs Review: {count}\nTop items:\n{self._format_candidate_lines(rows)}",
+                    inline_keyboard=self._paginate_buttons(buttons, 0, menu_action="readonly"),
+                )
 
             if cmd == "/review":
                 if not args:
@@ -522,22 +605,26 @@ class TelegramRuntime:
             if cmd == "/failed_mapping":
                 rows = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "failed")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "failed")
                     .order_by(RecruiterEmail.created_at.desc())
                     .limit(5)
                     .all()
                 )
                 count = (
                     db.query(RecruiterEmail)
-                    .filter(RecruiterEmail.owner_id == self.deps.owner_id, RecruiterEmail.state == "failed")
+                    .filter(RecruiterEmail.owner_id == tenancy.owner_id(), RecruiterEmail.state == "failed")
                     .count()
                 )
-                return f"Failed Mapping: {count}\nTop items:\n{self._format_candidate_lines(rows)}"
+                buttons = [self._tg_btn(f"Reject #{row.id}", f"act:reject:{row.id}") for row in rows]
+                return TelegramReply(
+                    text=f"Failed Mapping: {count}\nTop items:\n{self._format_candidate_lines(rows)}",
+                    inline_keyboard=self._paginate_buttons(buttons, 0, menu_action="readonly"),
+                )
 
             if cmd == "/recent_runs":
                 runs = (
                     db.query(SyncRun)
-                    .filter(SyncRun.owner_id == self.deps.owner_id)
+                    .filter(SyncRun.owner_id == tenancy.owner_id())
                     .order_by(SyncRun.created_at.desc())
                     .limit(5)
                     .all()
@@ -634,6 +721,20 @@ class TelegramRuntime:
         callback_data: str,
         message_id: int,
     ) -> str | TelegramReply:
+        owner = self.deps.resolve_owner(chat_id)
+        if owner is None:
+            return "This chat is not linked to an account."
+        with tenancy.owner_scope(owner):
+            return self._handle_callback(chat_id, user_id, username, callback_data, message_id)
+
+    def _handle_callback(
+        self,
+        chat_id: int,
+        user_id: str,
+        username: str,
+        callback_data: str,
+        message_id: int,
+    ) -> str | TelegramReply:
         _ = user_id
         _ = username
         action, page = self._parse_callback_data(callback_data)
@@ -659,6 +760,203 @@ class TelegramRuntime:
                 inline_keyboard=[[self._tg_btn("Cancel", "cancel:pending")], [self._tg_btn("Home", "menu:main:0")]],
                 edit_message_id=message_id,
                 callback_notice="Awaiting input.",
+            )
+
+        if (
+            callback_data.startswith("act:prop:send:")
+            or callback_data.startswith("act:prop:cancel:")
+            or callback_data.startswith("act:prop:force:")
+        ):
+            try:
+                _, _, action_name, raw_id = callback_data.split(":", 3)
+                proposal_message_id = int(raw_id)
+            except ValueError:
+                return TelegramReply(text="Invalid proposal.", edit_message_id=message_id, callback_notice="Invalid proposal.")
+            if action_name in {"send", "force"} and not TelegramRuntimeState.session_is_active(chat_id):
+                TelegramRuntimeState.set_pending_mode(chat_id, f"await_auth_pin|{callback_data}|{message_id}")
+                return TelegramReply(
+                    text=self._pending_prompt("await_auth_pin"),
+                    inline_keyboard=[[self._tg_btn("Cancel", "cancel:pending")]],
+                    edit_message_id=message_id,
+                    callback_notice="Authentication required.",
+                )
+            db = self.deps.session_factory()
+            try:
+                proposal = (
+                    db.query(ChatMessage)
+                    .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+                    .filter(
+                        ChatMessage.id == proposal_message_id,
+                        ChatMessage.role == "tool",
+                        ChatMessage.tool_name.in_(EMAIL_PROPOSAL_TOOLS),
+                        ChatSession.owner_id == tenancy.owner_id(),
+                    )
+                    .first()
+                )
+                if proposal is None:
+                    return TelegramReply(text="Proposal not found.", edit_message_id=message_id, callback_notice="Not found.")
+                from app.services.telegram_format import email_proposal
+
+                rendered = email_proposal(proposal.content, proposal.id)
+                if rendered is None or rendered[1] is None:
+                    return TelegramReply(text="This proposal is incomplete.", edit_message_id=message_id, callback_notice="Incomplete.")
+                if self.deps.record_proposal_outcome is None:
+                    raise RuntimeError("Proposal outcome recorder is unavailable")
+                if action_name == "cancel":
+                    self.deps.record_proposal_outcome(
+                        db,
+                        proposal.session_id,
+                        tool_name=proposal.tool_name,
+                        outcome="cancelled",
+                        proposal_message_id=proposal.id,
+                    )
+                    return TelegramReply(
+                        text="Email cancelled. Nothing was sent.",
+                        inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
+                        edit_message_id=message_id,
+                        callback_notice="Cancelled.",
+                    )
+                if self.deps.send_chat_reply is None:
+                    raise RuntimeError("Telegram email sender is unavailable")
+                payload = json.loads(proposal.content)
+                unknown_recipients = [
+                    str(value) for value in (payload.get("unknown_recipients") or []) if str(value).strip()
+                ]
+                if action_name == "send" and unknown_recipients:
+                    # A second, deliberate tap. The first Send was a tap on a
+                    # card; this one is an answer to a question naming the
+                    # address, which is the only form of it a user can check.
+                    return TelegramReply(
+                        text=(
+                            "<b>Not in your records:</b> "
+                            + ", ".join(escape(value) for value in unknown_recipients)
+                            + "\n\nThis address is not on the thread and not in your saved "
+                            "contacts. Send anyway?"
+                        ),
+                        inline_keyboard=[[
+                            self._tg_btn("Send anyway", f"act:prop:force:{proposal_message_id}"),
+                            self._tg_btn("Cancel", f"act:prop:cancel:{proposal_message_id}"),
+                        ]],
+                        edit_message_id=message_id,
+                        callback_notice="Confirm the recipient.",
+                    )
+                # Only the second tap carries the recipient confirmation. The
+                # first never can - that is what makes it a second tap.
+                confirmed = action_name == "force"
+                composing = payload.get("action") == "send_new_email"
+                if composing and self.deps.send_chat_new_email is None:
+                    raise RuntimeError("Telegram new-email sender is unavailable")
+                try:
+                    if composing:
+                        self.deps.send_chat_new_email(
+                            ChatNewEmailRequest(
+                                to=str(payload["to"]),
+                                cc=str(payload.get("cc") or ""),
+                                subject=str(payload["subject"]),
+                                body=str(payload["body"]),
+                                document_ids=list(payload.get("document_ids") or []),
+                                resume_id=int(payload.get("resume_id") or 0),
+                                confirm_new_recipients=confirmed,
+                            ),
+                            db,
+                        )
+                    else:
+                        self.deps.send_chat_reply(
+                            int(payload["candidate_email_id"]),
+                            ChatSendReplyRequest(
+                                body=str(payload["body"]),
+                                subject=str(payload["subject"]),
+                                document_ids=list(payload.get("document_ids") or []),
+                                resume_id=int(payload.get("resume_id") or 0),
+                                confirm_new_recipients=confirmed,
+                                # Sent explicitly rather than left to the row, so
+                                # what the card showed is what leaves. A proposal
+                                # drawn before this field existed has no "to" and
+                                # falls back to the thread's.
+                                to=str(payload["to"]) if payload.get("to") is not None else None,
+                                cc=str(payload["cc"]) if payload.get("cc") is not None else None,
+                            ),
+                            db,
+                        )
+                except Exception:
+                    self.deps.record_proposal_outcome(
+                        db,
+                        proposal.session_id,
+                        tool_name=proposal.tool_name,
+                        outcome="failed",
+                        proposal_message_id=proposal.id,
+                    )
+                    return TelegramReply(
+                        text="Email could not be sent. Nothing was changed.",
+                        edit_message_id=message_id,
+                        callback_notice="Send failed.",
+                    )
+                self.deps.record_proposal_outcome(
+                    db,
+                    proposal.session_id,
+                    tool_name=proposal.tool_name,
+                    outcome="confirmed",
+                    proposal_message_id=proposal.id,
+                )
+                return TelegramReply(
+                    text="Email sent.",
+                    inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
+                    edit_message_id=message_id,
+                    callback_notice="Sent.",
+                )
+            finally:
+                db.close()
+
+        if callback_data.startswith("act:approve:") or callback_data.startswith("act:reject:"):
+            action_name, raw_id = callback_data.split(":", 2)[1:]
+            try:
+                email_id = int(raw_id)
+            except ValueError:
+                return TelegramReply(text="Invalid action.", edit_message_id=message_id, callback_notice="Invalid action.")
+            db = self.deps.session_factory()
+            try:
+                candidate = self.deps.get_candidate_review(email_id, db)
+            finally:
+                db.close()
+            card = self._format_review_message(candidate)
+            verb = "send" if action_name == "approve" else "reject"
+            card.text = f"<b>Confirm {verb}?</b>\n\n" + card.text
+            card.inline_keyboard = [
+                [self._tg_btn(f"Confirm {verb.title()}", f"act:go:{action_name}:{email_id}")],
+                [self._tg_btn("Cancel", "menu:main:0")],
+            ]
+            card.edit_message_id = message_id
+            card.callback_notice = "Confirmation required."
+            return card
+
+        if callback_data.startswith("act:go:approve:") or callback_data.startswith("act:go:reject:"):
+            try:
+                _, _, action_name, raw_id = callback_data.split(":", 3)
+                email_id = int(raw_id)
+            except ValueError:
+                return TelegramReply(text="Invalid action.", edit_message_id=message_id, callback_notice="Invalid action.")
+            auth_error = self._require_action_auth(chat_id, f"/{action_name}", None)
+            if auth_error:
+                TelegramRuntimeState.set_pending_mode(chat_id, f"await_auth_pin|{callback_data}|{message_id}")
+                return TelegramReply(
+                    text=self._pending_prompt("await_auth_pin"),
+                    inline_keyboard=[[self._tg_btn("Cancel", "cancel:pending")]],
+                    edit_message_id=message_id,
+                    callback_notice="Authentication required.",
+                )
+            command = f"/{action_name} {email_id}"
+            if action_name == "reject":
+                command += " Rejected from Telegram"
+            result = self.handle_command(chat_id, user_id, username, command)
+            if isinstance(result, TelegramReply):
+                result.edit_message_id = message_id
+                result.callback_notice = "Done."
+                return result
+            return TelegramReply(
+                text=result,
+                inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
+                edit_message_id=message_id,
+                callback_notice="Done.",
             )
 
         if callback_data.startswith("cmd:"):

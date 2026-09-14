@@ -201,6 +201,68 @@ input[type='radio'] {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Signed-in account, foot of the rail ---- */
+
+/* Below the nav and divided from it: this is session identity, not a place to
+   go. Present only when sign-in is on. */
+.accountBlock {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.accountEmail {
+  /* Addresses are long and the rail is fixed-width, so this must truncate
+     rather than widen the rail or wrap to three lines. The full address stays
+     available on hover via title. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 12px;
+  color: #34405a;
+  font-size: var(--text-sm);
+}
+
+.accountRole {
+  justify-self: start;
+  margin: 0 12px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #e7edfb;
+  color: var(--primary-strong);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.signOutBtn {
+  /* Quiet by default - signing out is deliberate, not something to invite by
+     accident - but a full-width target with a real border, not a text link
+     hidden among the nav rows. */
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: #293246;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+
+.signOutBtn:hover {
+  border-color: var(--danger);
+  background: #fdf2f3;
+  color: var(--danger);
+}
+
+.signOutBtn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .mainPane {
   min-width: 0;
 }
@@ -2212,6 +2274,13 @@ button.emailSearchResult:focus-visible {
 }
 
 @media (max-width: 900px) {
+  /* The rail stacks above the content here, so its last row sits under the
+     fixed chat launcher. Clearing the launcher's 58px plus its offset keeps
+     Sign out fully clickable rather than half-covered. */
+  .accountBlock {
+    padding-bottom: 76px;
+  }
+
   .topHeader {
     padding: 0 14px;
     gap: 8px;
@@ -2333,29 +2402,11 @@ button.emailSearchResult:focus-visible {
   font-size: 12px;
 }
 
-.syncNowWrap {
-  position: relative;
-  display: inline-flex;
-}
-
-.liveReplyBadge {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: #16a34a;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  box-shadow: 0 0 0 2px #fff;
-}
+/* `.liveReplyBadge` lived here: a green pip on Sync Now carrying the Inbox's
+   unread count. The count moved to the Inbox nav item, beside the page it
+   refers to, where `.navCount` already styles every other row's number. Both
+   rules are gone rather than left for a future reader to wonder about, and
+   `.syncNowWrap` went with them - it existed only to position the pip. */
 
 .trackingBadge.opened {
   border-color: #86efac;
@@ -7770,4 +7821,214 @@ button.chatRankedLabel:focus-visible {
 .chatMessages::-webkit-scrollbar-thumb:hover,
 .assistantMessages::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
+}
+
+/* ---------------------------------------------------------------------------
+   Account card (§13: export, deactivate, delete)
+
+   Three zones, graded by how hard the action is to undo. The palette already
+   encodes that distinction, so it is reused rather than reinvented: --caution-*
+   is documented as "a qualification, not a failure" and fits deactivation,
+   which an administrator can reverse for 30 days; --refusal-* carries the
+   danger hue for the one action that ends in nothing being left.
+
+   The grading is the whole design. Three identical rows of buttons would make
+   "export" and "delete for ever" look like the same kind of decision.
+   --------------------------------------------------------------------------- */
+
+.accountSection {
+  padding: 16px 0;
+}
+
+.accountSection + .accountSection {
+  border-top: 1px solid var(--line);
+}
+
+.accountSection__title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.accountSection__blurb {
+  margin: 0 0 12px;
+  max-width: 62ch;  /* Measure, not container width: these are read, not scanned. */
+  line-height: 1.55;
+}
+
+.accountSection--caution .accountSection__title { color: var(--caution-ink); }
+
+/* The irreversible zone is inset rather than merely tinted text, so it reads as
+   a different place on the page and not just a redder paragraph. */
+.accountSection--refusal {
+  margin-top: 4px;
+  padding: 16px;
+  border: 1px solid var(--refusal-line);
+  border-radius: 10px;
+  background: var(--refusal-surface);
+}
+
+.accountSection--refusal + .accountSection,
+.accountSection--refusal {
+  border-top: 0;
+}
+
+.accountSection--refusal .accountSection__title { color: var(--refusal-ink); }
+.accountSection--refusal .accountSection__blurb { color: #7c2a33; }
+
+.confirmDeletion__literal {
+  padding: 1px 6px;
+  border: 1px solid var(--refusal-line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--refusal-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  /* Selectable on purpose: the point of typing it is deliberation, but nobody
+     should be defeated by a long address they cannot read back. */
+  user-select: all;
+}
+
+.confirmDeletion__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--refusal-ink);
+}
+
+.card .confirmDeletion__input {
+  max-width: 380px;
+  border-color: var(--refusal-line);
+  background: #fff;
+}
+
+.card .confirmDeletion__input:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.confirmDeletion__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* Solid, unlike .dangerButton's outline. This is the last click before an
+   account stops existing; the outline treatment is right for "open the
+   confirmation" and too quiet for the confirmation itself. */
+.card .dangerButtonSolid {
+  border-color: var(--danger) !important;
+  background: var(--danger) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.card .dangerButtonSolid:hover:not(:disabled) {
+  background: #9c0d1a !important;
+  border-color: #9c0d1a !important;
+}
+
+.card .confirmDeletion__cancel {
+  background: transparent !important;
+  border-color: var(--refusal-line) !important;
+}
+
+.card .confirmDeletion__cancel:hover:not(:disabled) {
+  background: #fff !important;
+}
+
+.accountCard__error {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--refusal-line);
+  border-radius: 8px;
+  background: var(--refusal-surface);
+  font-size: 13px;
+}
+
+/* §14 H1: the app-wide / per-user boundary, said once at the top of Settings.
+
+   Deliberately quiet. The failure mode is silent - change something here,
+   watch it work, assume it shipped - and the fix is one clear sentence in the
+   right place, not a banner. Anything loud becomes noise you stop seeing,
+   which would leave the page exactly as it was before. */
+.boundaryNote {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.boundaryNote strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Inbox delivery status.
+   One line under the Reply Inbox toggle, and the only place the app says
+   anything about push delivery. Built from the tokens already here rather than
+   new colours: a status line that introduced its own palette would be the most
+   prominent thing on a settings page full of quieter controls.
+
+   The label carries the weight and the hint carries the sentence, so the state
+   is readable at a glance and the explanation is there for the one time
+   somebody needs it. */
+.deliveryStatus {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.deliveryStatus__label {
+  flex: none;
+  font-weight: 600;
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.deliveryStatus__hint {
+  color: var(--muted);
+}
+
+/* Live. Deliberately the calmest of the three coloured states - it is the
+   state the app is in almost always, and a permanent green badge stops being
+   information within a day. */
+.deliveryStatus--ok .deliveryStatus__label {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
+  background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+  color: var(--ok);
+}
+
+.deliveryStatus--pending .deliveryStatus__label {
+  border-style: dashed;
+}
+
+/* Delayed and Setup required share the caution tone rather than danger: mail
+   is queued, not lost, and red would say otherwise. */
+.deliveryStatus--warn .deliveryStatus__label {
+  border-color: var(--caution-line);
+  background: var(--caution-surface);
+  color: var(--caution-ink);
+}
+
+.deliveryStatus--warn .deliveryStatus__hint {
+  color: var(--caution-ink);
 }

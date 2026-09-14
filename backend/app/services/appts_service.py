@@ -27,9 +27,11 @@ from app.models import (
     ResumeAsset,
     TrackedThread,
     EmailConversation,
+    RecruiterWatch,
+    UserSettings,
     utc_now,
 )
-from app.services import application_service, end_client_validation, recruiter_identity_service, resume_tracking_service
+from app.services import application_service, end_client_validation, label_tracking_service, recruiter_identity_service, resume_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ def enqueue_embedding_generation(record_id: int) -> None:
     try:
         get_queue(EMBEDDING_QUEUE).enqueue(
             run_generate_embedding_job,
-            kwargs={"record_type": "appts_application", "record_id": record_id},
+            kwargs={"record_type": "appts_application", "record_id": record_id, "owner_id": tenancy.owner_id()},
             retry=Retry(max=3, interval=[10, 30, 90]),
             job_timeout=60,
             result_ttl=3600,
@@ -96,6 +98,57 @@ def _source_email_id_for_record(db: Session, *, owner_id: str, record_id: str | 
     return row[0] if row else None
 
 
+def derive_application_watches(db: Session, owner_id: str, application: AppTSApplication) -> list[RecruiterWatch]:
+    user_settings = db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
+    if (
+        application.owner_id != owner_id
+        or application.deleted_at is not None
+        or application.status in label_tracking_service.APPLICATION_WATCH_TERMINAL_STATUSES
+        or user_settings is None
+        or not user_settings.feature_application_watches_enabled
+    ):
+        return []
+    address = label_tracking_service.normalize_address(
+        application.resolved_recruiter_email or application.manual_recruiter_email
+    )
+    if not label_tracking_service._ADDRESS.fullmatch(address):
+        return []
+    domain = label_tracking_service.domain_of(address)
+    active_count = [db.query(RecruiterWatch).filter(
+        RecruiterWatch.owner_id == owner_id,
+        RecruiterWatch.released_at.is_(None),
+    ).count()]
+    watches = []
+    for kind, value in [("address", address), ("domain", domain)]:
+        watch = label_tracking_service._upsert_watch(
+            db,
+            owner_id,
+            kind=kind,
+            value=value,
+            application_id=application.id,
+            active_count=active_count,
+        )
+        if watch is not None:
+            watches.append(watch)
+    return watches
+
+
+def backfill_application_watches(db: Session, owner_id: str) -> int:
+    user_settings = db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
+    if user_settings is None or not user_settings.feature_application_watches_enabled:
+        return 0
+    for application in db.query(AppTSApplication).filter(
+        AppTSApplication.owner_id == owner_id,
+        AppTSApplication.deleted_at.is_(None),
+        AppTSApplication.status.not_in(label_tracking_service.APPLICATION_WATCH_TERMINAL_STATUSES),
+    ).order_by(AppTSApplication.id):
+        derive_application_watches(db, owner_id, application)
+    return db.query(RecruiterWatch).filter(
+        RecruiterWatch.owner_id == owner_id,
+        RecruiterWatch.released_at.is_(None),
+    ).count()
+
+
 def _insert(db: Session, application: AppTSApplication) -> tuple[AppTSApplication, bool]:
     try:
         with db.begin_nested():
@@ -120,6 +173,7 @@ def _insert(db: Session, application: AppTSApplication) -> tuple[AppTSApplicatio
         event_source="user",
         models=APPTS_MODELS,
     )
+    derive_application_watches(db, application.owner_id, application)
     return application, True
 
 

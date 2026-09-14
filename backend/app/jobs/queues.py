@@ -15,6 +15,13 @@ SCHEDULED_TASK_QUEUE = "scheduled_task"
 # rejects a job with 409 while any other job is active on the same queue, and a
 # sync running is exactly when a user is most likely to be pasting.
 MANUAL_INTAKE_QUEUE = "manual_intake"
+# Gmail push events. Separate from gmail_sync because the two have opposite
+# shapes: a sync is one long job a user is waiting on, an event is a stream of
+# short ones nobody is watching. Sharing a queue would leave notifications
+# queued behind a sync that takes minutes, which is the delay this feature
+# exists to remove.
+GMAIL_EVENT_QUEUE = "gmail_event"
+TELEGRAM_CHAT_QUEUE = "telegram_chat"
 QUEUE_NAMES = frozenset(
     {
         GMAIL_SYNC_QUEUE,
@@ -23,6 +30,8 @@ QUEUE_NAMES = frozenset(
         EMBEDDING_QUEUE,
         SCHEDULED_TASK_QUEUE,
         MANUAL_INTAKE_QUEUE,
+        GMAIL_EVENT_QUEUE,
+        TELEGRAM_CHAT_QUEUE,
     }
 )
 

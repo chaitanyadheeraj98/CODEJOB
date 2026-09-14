@@ -21,7 +21,7 @@ def test_catalog_routes_are_owner_scoped_and_validate_ids():
         with factory() as db:
             yield db
     main.app.dependency_overrides[main.get_db] = db_dependency
-    main.orchestration_service = None
+    main.reset_owner_scoped_services()
     try:
         client = TestClient(main.app)
         with patch("app.gmail_client.list_gmail_labels", return_value=[{"id": "Label_1", "name": "RTR"}]):
@@ -88,5 +88,5 @@ def test_catalog_routes_are_owner_scoped_and_validate_ids():
             assert client.get("/records/by-message/msg").status_code == 404
     finally:
         main.app.dependency_overrides.clear()
-        main.orchestration_service = None
+        main.reset_owner_scoped_services()
         engine.dispose()

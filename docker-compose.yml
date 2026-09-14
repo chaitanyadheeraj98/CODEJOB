@@ -9,9 +9,28 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # C4: the API serves requests and must not carry torch. Every embedding
+      # belongs to the worker. See app/torch_guard.py for the measurement.
+      API_EMBEDDINGS_ENABLED: "false"
+    # `exec` so uvicorn replaces the shell and becomes PID 1. Without it the
+    # shell is PID 1, SIGTERM stops at the shell, uvicorn never sees it, and
+    # the container is SIGKILLed at the end of the grace period - exit 137, no
+    # graceful shutdown, so lifespan teardown never runs.
+    # `--no-access-log` because F3's `log_request_summary` replaces it, and
+    # uvicorn's version writes the full request line - **including the query
+    # string**. Nine endpoints take a free-text `q`, and people paste recruiter
+    # addresses and subject lines into search boxes, so that line was writing
+    # exactly the content §12.1 forbids recording. Ours logs the route
+    # template and never the query.
     command: >
       sh -c "alembic upgrade head &&
-      uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+      --no-access-log"
+    # The default 10s is not enough for lifespan teardown: it stops the
+    # auto-runner thread and the Telegram poller, each joined with a 5s
+    # timeout. Cut short, the container dies with 137 instead of exiting
+    # cleanly.
+    stop_grace_period: 30s
     ports:
       - "8000:8000"
       - "8080:8080"
@@ -34,12 +53,15 @@ services:
       - ./backend/.env.postgres
     environment:
       REDIS_URL: redis://redis:6379/0
+      # C4: the worker is where embeddings run, so it is never guarded
+      # against the transformers/torch import. See app/torch_guard.py.
+      PROCESS_ROLE: worker
     # Every name in QUEUE_NAMES must stay on this list. A queue nothing consumes
     # accepts jobs silently and runs none of them - no error, no log, jobs sit
     # queued forever. No unit test can see it, because a fake queue always
     # succeeds; scripts/check_worker_queues.py compares this line against
     # app/jobs/queues.py and is the only thing that does.
-    command: rq worker gmail_sync nvoids_sync automation_run embedding_generation scheduled_task manual_intake --url redis://redis:6379/0 --with-scheduler
+    command: rq worker gmail_sync nvoids_sync automation_run embedding_generation scheduled_task manual_intake gmail_event telegram_chat --url redis://redis:6379/0 --with-scheduler
     volumes:
       - backend_data:/app/data
     depends_on:
@@ -50,6 +72,37 @@ services:
       postgres:
         condition: service_healthy
 
+  gmail-pubsub:
+    build:
+      context: ./backend
+    container_name: codejob-gmail-pubsub
+    env_file:
+      - ./backend/.env
+      - ./backend/.env.postgres
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      PROCESS_ROLE: gmail-pubsub
+      # Read by the Google client from the environment, not by app config - a
+      # settings field holding the path to a service-account key is one repr()
+      # away from a log line. The file itself is mounted below, never built
+      # into the image.
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-pubsub.json
+    # Streaming pull only. This process registers no HTTP route, which is the
+    # entire reason the architecture is pull rather than push: nothing publicly
+    # reachable has to exist for Google to deliver to a laptop.
+    command: python -m app.gmail_pubsub_subscriber
+    # Read-only, and a directory rather than a Compose `secret` so that an
+    # install without the key still starts. The process exits 0 when the
+    # feature is off, so this service is inert until Phase F mounts a real
+    # credential and turns the flag on.
+    volumes:
+      - ./secrets:/run/secrets:ro
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
   dashboard:
     build:
       context: ./dashboard

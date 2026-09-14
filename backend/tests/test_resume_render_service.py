@@ -7,20 +7,34 @@ import pytest
 from app.services import resume_render_service as render
 
 
-def test_render_slots_reject_overload_and_are_released_after_timeout(tmp_path):
-    for _ in range(4):
-        assert render._RENDER_SLOTS.acquire(blocking=False)
-    try:
-        with patch.object(render, "_soffice", return_value="soffice"), pytest.raises(RuntimeError, match="busy"):
-            render.build_pdf("# Alex", render.ResumeFormatSpec(), tmp_path / "r.pdf")
-    finally:
-        for _ in range(4):
-            render._RENDER_SLOTS.release()
-    with patch.object(render, "_soffice", return_value="soffice"), patch.object(render.subprocess, "run", side_effect=subprocess.TimeoutExpired("soffice", 75)):
+def test_render_admission_refusal_becomes_a_busy_message(tmp_path):
+    """The four-slot semaphore moved to shared admission in C1.
+
+    Forced rather than produced by filling a real pool: what matters here is
+    that a refusal reaches the caller as "busy" rather than a traceback. The
+    caps themselves are covered in test_admission_service.py.
+    """
+    with patch.object(
+        render.admission_service, "acquire",
+        side_effect=render.AdmissionRejected("global", "Rendering is busy."),
+    ), patch.object(render, "_soffice", return_value="soffice"), pytest.raises(RuntimeError, match="busy"):
+        render.build_pdf("# Alex", render.ResumeFormatSpec(), tmp_path / "r.pdf")
+
+
+def test_the_slot_is_released_even_when_rendering_times_out(tmp_path):
+    """A leaked lease is worse than a leaked semaphore: it outlives the process."""
+    released = []
+    real_release = render.admission_service.release
+
+    def record(lease, **kwargs):
+        released.append(lease)
+        return real_release(lease, **kwargs)
+
+    with patch.object(render, "_soffice", return_value="soffice"),             patch.object(render.subprocess, "run", side_effect=subprocess.TimeoutExpired("soffice", 75)),             patch.object(render.admission_service, "release", side_effect=record):
         with pytest.raises(RuntimeError, match="timed out"):
             render.build_pdf("# Alex", render.ResumeFormatSpec(), tmp_path / "r.pdf")
-    assert render._RENDER_SLOTS.acquire(blocking=False)
-    render._RENDER_SLOTS.release()
+
+    assert len(released) == 1, "the lease must be given back on the failure path"
 
 
 def test_thumbnails_are_cached_by_spec_and_use_isolated_office_profiles():

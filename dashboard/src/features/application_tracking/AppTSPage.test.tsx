@@ -73,7 +73,7 @@ describe('AppTSPage filter/sort wiring', () => {
   it('sends the Tracked and Applied snapshot filters', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url.includes('/appts/applications')) return jsonResponse({ items: [], total: 0, next_cursor: null, has_next: false })
+      if (url.includes('/appts/applications')) return jsonResponse({ items: [], total: 0, next_cursor: null, has_next: false, watch_count: 7, watch_limit: 200, watch_limit_reached: false })
       return jsonResponse({ detail: 'not found' }, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -107,6 +107,7 @@ describe('AppTSPage filter/sort wiring', () => {
     expect(url.searchParams.get('role')).toBe('Java')
     expect(url.searchParams.get('has_premium_contact')).toBe('true')
     expect(url.searchParams.get('tracked')).toBe('false')
+    expect(container.textContent).toContain('Recruiter watch budget: 7 of 200 used.')
   })
 
   function makeApplication(overrides: Record<string, unknown> = {}) {

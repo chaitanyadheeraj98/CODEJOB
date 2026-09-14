@@ -1,0 +1,6636 @@
+{
+  "entity_type": "role",
+  "entries": [
+    {
+      "aliases": [],
+      "canonical_name": "Ab Initio Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Actimize Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ADF Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Adobe AEP-Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Adobe AEP Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Adobe Experience Manager (AEM) Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Adobe Experience Manager (AEM) Solutions Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Adobe Experience Manager Templates developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Advanced Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AEM Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AEM Developer (Backend)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AEM Solutions Engineer Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AEM Solutions Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agentic AI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agentic AI developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agentic AI developers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agentic AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agentic AI Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agentic AI Platforms Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Agile Scrum Master",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Architect Agentic AI Platforms",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Architect IV",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Architect/Principle",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Automation Quality Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Data Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Developer (Full Stack, Java Spring Boot, React, GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Developer Java Backend",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI DevOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI-Enabled Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer (Applied AI / Machine Learning)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer - Applied AI / ML",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer – Generative AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer - Generative AI & Full Stack Development",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer - Java/Spring Boot",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer (Python and Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer with Java Development",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Engineer with Java (Full stack) Exp",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI First Engineer – Oracle SCM Applications Suite",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI-First Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI / Generative AI Engineer (LLM, RAG)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Governance Portal Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Identity Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Integration Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Java Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI-Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Java Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI JAVA FULL STACK ENGINEER",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Java Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Lead (Generative AI)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/LLM Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Machine Learning Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML and GenAI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML Engineer - Senior",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML Engineer with Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML Engineers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/ML Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI-Native Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Platform Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Pod Product Owner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Product Owner with P&C insurance experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Program Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI/Python/Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Scrum Master",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Software Development & Technology Support Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Software Engineer (Node.js)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Software Engineer (Node.js) - Fully Remote",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Support - Full stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Technology Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI Test Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AI UI/UX Front-End Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AIML Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Akamai Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AL/ML Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Amazon Connect Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Amazon Connect Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Android Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Android developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Android / iOS Developer (Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Android / iOS Mobile Developer (Java Microservices)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Angular Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Angular Engineer (Web)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Angular Java Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Angular Lead Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Angular UI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Apache Spark Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "API Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "API Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "API Developer (Java & GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "API Developer (Java / Node.js / AWS)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "API Integration Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "API Test Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "API TESTER",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Apigee API Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Apigee Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Apigee Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Appian Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Appian Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Appian - Transition Analysis Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Architect II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Developer – Appian",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Developer Java & Web Technologies",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Developer (RDBMS)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Developer SAP BTP CAP Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Developer - Senior",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Development - Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Programmer III",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Security",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Security Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Security Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Security Engineer – AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Support Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Support Engineer - Core Banking & Payments",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Support Engineer (Java/ReactJS)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Application Systems Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Applied AI Engineer / Application Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ArcGIS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Archer Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Architect II – Agentic AI & Intelligent Automation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Architect Java Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Architect/Principal Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Architect / Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Architecture Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Associate Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Ataccama MDM Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Automation Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Automation Developer - IBM MQ",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Automation Developer - IBM MQ Migration Automation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Automation engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Automation Selenium",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Automation Test Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Automation Tester/Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Application Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Cloud Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Cloud/Devops Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Cloud Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Cloud Migrations Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Cloud Security Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Contact Center Foundation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS DevOps & Release Management Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS DevOps / DevSecOps Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS DevOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS /Flink Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Full Stack",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Java Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS / Java Cloud Modernization Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS/Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS/Java/ETL Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Java FSD",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Java Full Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Lead developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS/Python Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Senior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWS Technical Program Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "AWSJava ETL Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure Cloud Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure Data Solutions Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure DataBricks Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure Engineer with IAM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure Integration Engineer with Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure Java Developer with Kafka and Rabbit MQ Payment",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure Snowflake with Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Azure Tech Lead / Product Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Back End Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Back End Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Back End Java Developer with GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend AI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend/API Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Dev Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Developer / Application Architect AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Developer – Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Developer (Java) - GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Developer (Springboot, Java, GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Developer with Java, Spring boot",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Development Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Engineer (Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend/Full stack developer Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Java developer Spring Boot, REST APIs",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backend Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Backup and Recovery Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BE API Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BI Lead Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Big Data Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Big Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Bigdata Engineer with Hadoop",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Billing Domain Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BISO (Business Information Security Officer)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boomi Integration Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Boomi Integration Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "BSA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst (BPM)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst/Consultant IV",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst (CSDM/CMDB)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst – Genesys Contact Center",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst / Labor Management Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst (Pharma Domain)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst – PMO",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst / Product Owner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Analyst with Oracle Finance Module",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Data Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Development Manager (US IT Staffing)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Intelligence (BI) Automation Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Intelligence (BI) Automation Consultant/Reporting Automation Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Intelligence Data Modeler",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Process Modeler",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business System Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Business Systems Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "C++ Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "C++/Java Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "C#.Net developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Camunda & Java Spring Boot Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Camunda BPM Expert",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Camunda BPM Expert / Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Camunda BPM Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Camunda Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Camunda Developer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Camunda Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cards Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CCaaS Google Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Certified Java Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Change Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Chief Technology Officer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Citrix Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud & Microservices Expert",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Architect AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Devops Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Engineer AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Engineer Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Engineers (AWS/Azure/GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Java developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Security Architect - Expert",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Solutions Architect 2",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Solutions/Data Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud Solutions/Data Architect - Databricks & AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cloud SRE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CM Change Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cognos Report Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Compute Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Construction Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Conversational AI Data Analyst Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Core Java Backend Developer with Next.js",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Core Java Backend Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Core Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Core Java with Multithreading",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CPQ Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CPQ Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Creative Director",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CRIMS/OMS Technical Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CRM Business / Systems Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "CRM Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Curam Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber security",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security / Application Security Auditor",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security Auditor",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security Governance Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security Identity & Access Management (IAM)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security Lead Architect IAM, CIAM, SSO, PING",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cyber Security Senior Full Stack Application Development Security Auditor",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Cybersecurity IAM Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "D365 Finance Consultant / Architect (CPA)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Analytics Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data & AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Architect/Data Modeler",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Center Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Center Operator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Engineer Ab initio",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Engineer AI/ML & Advanced Analytics",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Engineer – Big Data & GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data engineer (ETL/ELT)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Engineer with Talend and Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Engineers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Integration Engineer - Cash Analytics",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Migration Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Modeler",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Modeling LEAD / Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data/Scala/Spark Engineering Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Science",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Scientist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Security Assessor (GCP-based conversational AI)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Solutions Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Tech Lead with Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Data Tester",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Database Admin",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Database Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Database Administrator/Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Database Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Databricks Data Engineer / Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Databricks Developer (Healthcare domain, HL7 FHIR)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DBA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DC – Windows and Linux Admin L3",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Delivery & Validation Business Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Delivery Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Denodo Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Depot Provisioning Team Member / IT Asset & Device Provisioning Technician",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Developer/Programmer Analyst 3",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Developer, Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Devops",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Admin",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps and MuleSoft Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Engineer (AI/ML)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Engineer - Ansible",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Engineer - Automation and DevOps Engineering",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Engineer (Data Integration Engineer - Cash Analytics)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Engineer with Ansible",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Engineer with Electronic Trading",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps Engineers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevOps / Integration Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevSecOps",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DevSecops Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DFC Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Digital Finance Product Owner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Digital Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Documentum xCP Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dot Net Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dot Net/Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dot NET Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "DuckCreek Technical Business Analyst with Prior Development Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dynamic 365 Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dynamic Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dynamic Architect / Technical Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dynamics 365 AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dynamics 365 / CRM Engineer (Senior Developer)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Dynamics 365 CRM Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ECM Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "EDI consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ELK Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ELK Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Embedded Systems Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Encounter Data Manager (EDM) Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Endur Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Engagement Manager (EM)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Engineer II – Java / Java Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Engineer III-Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Engineer III-Java; Big Data; Spring; Spring Boot; NoSQL Cassandra - PHX",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Engineer, Software Sr",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Engineering Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Engineering Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enterprise Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enterprise Architect with Front-End Skills",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enterprise Microsoft Systems Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enterprise Project Manager - Executive (Interim Executive Director)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Enterprise Security Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Entra ID Team Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Equipment Qualification Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ERP Integration Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ETL / Code Connector Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ETL Data stage Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ETL Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ETL tester",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ETL with Snowflake Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FileNet Dev & Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FinOps Analytics Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FinOps Analytics Engineer/Data Analyst/Visualization",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Flowable Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ForgeRock Developer with Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployed Developer (FDD)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployed Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployed Engineer (FDE)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployed Engineer (FDE) – Agentic AI & Enterprise Solutions",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployment Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployment Engineer (FDE) GenAI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployment Engineer (FDE) – GenAI / Full Stack",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Forward Deployment Engineer (FDE) GenAI / Java Full Stack",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Front End Java Lead/Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Front End ReactJS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Front End ReactJS Developer - TypeScript / JavaScript / Redux",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Front-End / Reporting Engineer AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frontend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frontend Developer (Angular)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frontend React Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Frontend Web Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack AI Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack AI-Enabled Applications Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack AI Engineer (Generative AI) with AWS Bedrock",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Angular / Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack Application Architect (AI, MLOps, GenAI and AgenticAI)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full-Stack / Cloud Developer (Access Management Focus)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full-Stack / Cloud Developer (Identity & Inbound/Outbound SSO)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack dev",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Dev with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer - Advanced",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (AI Native)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Angular + Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Angular + Java Spring Boot)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer / Applied AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Frontend Development)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Frontend Development (Primary Focus))",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Full stack Application Development w/ AWS, ROSA, Java Spring, Angular JS)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack developer (Heavy on UI)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer - Heavy React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer III",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer IV",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Java & React)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Java, python, React js) with Conversational AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (Java, React & AI)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full-Stack Developer (Node.js / Vue.js)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack developer (Python + React.JS)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer - React and Node.js",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (React Developer)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer React (Frontend-Focused)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer (React/Python/Postgres/Azure)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack developer with AI/Gen AI Exp",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack developer with AI(Heavy on UI)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer with AI - Heavy UI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack Developer with Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer with JAVA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Developer With React & Ruby",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineer AI Enabled",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineer- Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineer Level II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineer with AI experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineer with GenAI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Engineers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack GCP Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Golang Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack (Java/Angular)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java Developer - 50% Backend / 50% Frontend",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java Developer (IAM)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java Developer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack Java Developer with React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java Engineer (Cloud & SRE)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java/React Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Java with Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Lead Developer – Code Modernization & GitHub Copilot",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack .NET AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack .NET Engineer -AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Python Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Python Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack React Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack (React, Spring Boot, NodeJs, J2EE, Microservices)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack / React UI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Software Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Software Engineer (.NET/Java) - Level II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full Stack Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Full stack with Python Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack Developer (Core Backend: Java and Microservices)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack developer (Java Springboot / Angular)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "FullStack Developer with Gen AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack developers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack Engineer with Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack Java Developer With React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Fullstack Python Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Functional Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Functional/Techno-Functional Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Certified java developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Cloud, Data & AI Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Cloud Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Cloud Security / Data Security Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Data Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Data Developer with Java exp",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP DevOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP GenAI/ Agentic AI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP GenAI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP IAM Engineer (Associate)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP IAM Lead / Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Infrastructure Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Java developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Kubernetes Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP/Kubernetes Engineer with AI/ML",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Network Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GCP Platform Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GEN AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Gen AI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GEN AI developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Gen AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Gen AI/ML Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Gen AI Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GEN AI Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Application Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Architecture Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Developer With JAVA and SpringBoot",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Engineer (Full Stack)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Engineer with Azure",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Engineers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Forward Deployed Engineer (FDE)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GenAI Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Generative AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Generative AI Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GIS Business Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GIS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Go Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Golang DevOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Google Workspace Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GRC Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "GRC Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Guidewire Business Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Guidewire Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Guidewire Technical Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Healthcare Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Healthcare Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "HRIT Workday Extend Architect / Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hybrid AI/ML Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Hybrid Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IAM Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IAM SailPoint Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IBM i (AS/400 / iSeries) Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IBM Maximo Technical Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IBM OMS Sterling Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ICertis Certified Configurator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Identity, Authentication and Authorization Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Identity Security Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Industrial Engineering Analytics Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Info Cloud Admin & Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Informatica PowerCenter & IDMC/IICS Technical Lead – Migration Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Infrastructure Program Manager / Network Engineering Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Infrastructure Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Infrastructure Solutions Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Insurance Advisory Professional",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Integration Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Integration Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Integration Developer Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Integration Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Integration Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Integration Lead OIC Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Interim Executive Director for Network Infrastructure Services",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "iOS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IoT Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Architect 3",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Architect 3 - AI Software Engineering & Architecture",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Security Auditor",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Security Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Software Engineer 2",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Software Engineer 5",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Software Engineer 5 (Lead Software Engineer)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "IT Support Specialist III",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ITSS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ITSS Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "J2EE Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "JAMF-to-BigFix Migration Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "JAVA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Agentic AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Agentic Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "JAVA AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java & AI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java and AI Solution Architect/Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java and AWS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java and AWS Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java & GCP Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java and .NET Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java & React Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Angular Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java + Angular FullStack Technology Lead with AI Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java, Angular - SDM / Delivery Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java API",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java API Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java API Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java API Integration Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java API Senior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java API Test Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Application Developer - Senior",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Architect/ Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Architecture",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java ATG Technical lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java+ AWS+ AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS/Azure Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Solutions Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java AWS Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Azure architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Azure Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Back end Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Back end with Kotlin",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend & AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Dev Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer/Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer with Agentic AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java backend developer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer with AI Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer with Azure",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer with Kotlin",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer with Kotlin exp",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer with Next.js and Typescript",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developer with NodeJS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Developers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Engineer with Agentic AI skills",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend engineer with Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend/Microservices Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Software Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Backend Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java BPM Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Cloud Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java DB Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Dev (AWS, Microservices, Spring Boot)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Dev with Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer Agentic AI experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer – AI/GenAI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer - AI/ML",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (API)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer - AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer AWS, Python & Terraform",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (Azure)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (Backend)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer Billing Domain",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer for Tax Engineering",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer – Frontend, Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer – Full Stack",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer – GCP & Cloud Spanner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (GenAI)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer / Java Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer – Microservices / API",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (Production Support)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer - React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (React + Kafka + DB Integration)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer (Spring Boot)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer - Telecom Billing",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Agentic AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Agentic AI and Banking Domain",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Agentic AI Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AI/ADK Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AI and AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AI Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AI/GenAI Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AI/GenAI Expertise",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AI/ML",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with API",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with AWS & Terraform",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Azure",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Azure and AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Cards and Payments",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with DevOps & SRE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with ForgeRock IAM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with GCP Cloud",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with GCP cloud experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Gen AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with GenAI experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with GenAI, GitHub Copilot",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Golang",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Healthcare",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java developer with JBPM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java developer with JBPM development experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with jBPM experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Microservices and SRE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Mongo DB",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with MongoDB",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Mulesoft",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java developer with Oracle Sybase, Monolith",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with PBM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Production Support",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with QA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with QA / Performance Testing",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with Strong Angular + AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java developer with Strong Testing experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developer with SWIFT Payment experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "java developers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Developers proficient in AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java developers with IAM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java DevOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Engineer (Vert.x)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Engineer with DevOps",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Engineer with Vertex",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java front end developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Frontend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Frontend Developer with Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD with AI Analytics",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD with AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD with AWS (AI Exposure)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSD with AWS & AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FSE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Angular Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Backend Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer - AI / Heavy on UI & React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer (Angular)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer - Gen AI / LLM / ADK",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer - Heavy on React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer - Heavy UI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java full stack Developer Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer - React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer (React Focus)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer - React UI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full stack Developer SDD & Microservices",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer with Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer with AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full stack developer with Azure",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full stack Developer with Filenet",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer with IBM BAM OE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developer with IBM BAMOE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full stack developer with Photon and ESP experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java full stack developer with Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full stack Developer with React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Developers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Engineer/AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Engineer (Senior)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Engineer with strong hands-on AI/Generative AI experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack (React) Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full stack tech lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Tech Lead ReactJS (Telecom Domain)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack With AI Tools",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Full Stack with GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Fullstack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Fullstack Developer with FileNet",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FullStack Developer with Gen AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java FullStack Developer with UI And UX",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Fullstack Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Fullstack Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java GCP Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java GCP Developer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java / GCP Technical Lead - API & Microservices",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Integration Engineer II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java/J2EE Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java -Kotlin - AI Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java L4 Production Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Lead API Development & Integration",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Lead/Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Lead with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Lead with Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Microservice Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Microservice+ GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Microservices",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Microservices Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Microservices Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Microservices with GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Mid-level Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Multithreading Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Opentext Exstream Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Production Support",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Production Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Production Support Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Program Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java/Python AI/ML Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java / Python Developer – L3 Production Support",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java / React Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java + React Front-End Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Senior Advanced Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Senior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Senior Developer / Forward Deployed Developer (FDD) with GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java SME Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Software Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Solution Architect AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Spark Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Spark Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Sparks Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java / Spring Boot Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Spring Boot Developer (GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Spring Boot Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Spring Boot Microservices Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "JAVA Springboot Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java support engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Support Engineer (L3/L4 Support)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Tech Lead with GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Technical Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Technical lead with ATG",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java View.JS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java Web Technologies Developer with AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java With AI Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with Angular and AI LLM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with API",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with Azure",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with Cloud Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with Devops & SRE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with GCP Exp",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with GOS (Oracle), Kafka",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Java with React",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "jBPM Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Junior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Junior Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kafka ADMIN/ Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kafka Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Kafka Senior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "L2 Engagement Leader",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead AI Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Apigee API Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Apigee Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Application Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Backend",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Data Scientist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Developer – MuleSoft",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Devops Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead ForgeRock developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Full stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Fullstack AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead IT Security Endpoint Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Java AWS Developer with Golang",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Java Full stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Java Full Stack Developer with Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Java Full Stack Technical",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Java Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead MuleSoft Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead .NET Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead .NET Modernization Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Pega Developer / Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Python Full Stack Engineer with React JS & Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead QA Tester",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead React JS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Senior Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Site Reliability Engineer (SRE)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Software Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Software Engineer – AI Agents (GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead Software Engineer - Full Stack & Agentic AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Lead SRE Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Liferay Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Liferay Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mainframe Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mainframe Developer IMS/IDMS Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mango DB",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Manual / Automation QA Tester",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Marketing Functional Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Maximo Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Medicaid/MMIS Technical Java Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Microservices Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Microsoft Dynamics 365 CRM Functional Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Microsoft Dynamics 365 CRM Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Microsoft Dynamics 365 Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Microsoft Fabric Data Engineer / Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mid-Level Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mid-Level Full-Stack Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mid-Level Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mid-Level Java Full Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mid/Senior Power BI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MLOps Engineers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MS Dynamics 365 CE Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MS Dynamics Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MS Dynamics SCM Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MuleSoft Architect/Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mulesoft Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mulesoft Consultant with Salesforce Exp",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "MuleSoft Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Mysql DBA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NC DHHS AWS/Java/ETL Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NCDHHS Technical Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Neo4j Designer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": ".NET Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": ".NET Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": ".Net Full stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": ".Net Full Stack Developer with React Native",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": ".Net with COTS Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Network Application Security Engineer - Cloudflare Implementation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Network Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Network Infrastructure Project Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Node.js Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Node/JS Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "NodeJS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Observability Platform Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okta Access Gateway Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Okta Implementation Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OMS Sterling Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OnBase Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OpenText Documentum Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "OpenText Documentum / xCP Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle Agile PLM Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle BRM Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle BRM Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle Database Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle DBA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle Developer (RDBMS)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle EBS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle EBS Finance Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle EPM Profitability Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Oracle Postgres DBA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Payment Business Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Payments & Card Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pega Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pega Application Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pega Data Migration Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pega Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pega Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pega Lead System Architect (LSA)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PEGA PROGRAM MANAGER",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PEGA Senior Systems Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Pega System Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PeopleSoft Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PeopleSoft Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Performance Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Performance Test Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Performance Tester",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Platform Architect - Developer - Python",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Platform Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Playwright Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PLM Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PLM Teamcenter Lead / Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Principal Engineer - Technology Architect - Generative AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Principal Full Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Principal Java Backend Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Principal Java Backend Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Principal Quality Engineering Lead III",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Principal Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Product Delivery Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Product Engineering Lead / SFCC Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Product Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Product Owner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Program Manager Application Development / Banking",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Programmer Analyst III",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Programmer Analyst .NET Core",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Prompt Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "PSA Engineer - Network Transmission",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Python Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Python Developer (Java Background) - PBM Domain",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Python Developers with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Python Engineer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Python Engineer with Java full stack",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation Engineer (SDET)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation Lead/Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation Test Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation Tester",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Automation with Guidewire testing and Insurance Domain",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Engineers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Tester",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Testing",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QA Testing (Insurance or Financial Systems)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "QE Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quality Assurance Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quality Assurance Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quality Engineer AI & Test Automation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quality Engineer – Automation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quality Engineer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Quality Engineer with AI & Test Automation experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "React Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "React native developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ReactJs Senior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Real-Time Inference Engineering Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Release Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RPA Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RPA UiPath Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "RTC SME",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SailPoint Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Business Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Developers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Health Cloud Program Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Marketing Cloud Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Marketing Cloud (HubSpot) Tech Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Scrum Master / Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Salesforce Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SAP ABAP Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SAP BTP Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SAP Commerce Cloud Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SAP EHS Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SAP FICO",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SAP S/4 Technical Development Lead (Developer)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "scala Akka Microservices SME",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SDET",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SDET Automation (Java + Selenium)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SDET Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SDET Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SDET Program Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SDET Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Security Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Agentic AI Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior AI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior AI/ML Data Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Android Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Application Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Application Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Automation Test Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior AWS Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior AWS Full Stack Developer (Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior AWS Full Stack Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Azure Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Azure Databricks Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Azure .NET Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Backend Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Backend Focused - Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Backend Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Backend Software Engineer (Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Business Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior C++ Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Cloud Platform Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Databricks AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior DevSecOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior ForgeRock Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Front end UI ReactJs Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Frontend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior full stack Application Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full Stack Developer, AI-Assisted Development",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full Stack Developer (AI/LLM Integration)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full-Stack Developer (Java & React)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full-Stack Developer - Network OSS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full-Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full Stack Java / Angular Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full Stack Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full Stack Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Full-Stack Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior GCP Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Golang AWS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Healthcare Product Owner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior IT Security Endpoint Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java and Curam Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior JAVA/API Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java AWS / Amazon Connect Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java AWS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java/AWS Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Backend AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Backend & AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Backend Developer + Spark",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Backend Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Developer – Agentic AI & Google Cloud",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Developer - AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Developer GenAI & Microservices",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Developer – Python & AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Developer with AWS",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Drools Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Engineer with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java FSD Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Full Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Full Stack Engineer Angular",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Full Stack Lead (AI/LLM Integration)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Fullstack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java FullStack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java FullStack Engineer (with Angular)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java/J2EE Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java/Kotlin Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java L3 Application Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Microservices Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java/Microservices Developer Cloud Solutions",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Microservices Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java / React Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Solutions Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java / Spring Boot Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Java Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior/Lead Full Stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior/Lead Java Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior/Lead Java Full Stack Developer - React.js / Next.js",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior/Lead Power BI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Lead Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior LLMOps / MLOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior/Mid-level Java Core Backend Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Midlevel Java Front End Angular Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior .NET Core Azure Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior .Net Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior .NET Full-Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Network Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Network Security Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Network Security Engineer Juniper",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Numerix Python Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior OMS Sterling Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Oracle WebCenter Content Developer/ECM Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Production Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Program Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Python Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior QA Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior React Developer with Java API & Spring Boot Experience",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior React JS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Rust Architect/Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Rust Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior SailPoint Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior SailPoint ISC Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Salesforce Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior SAP Transformation Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior SDET",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior ServiceNow Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Software Architect (Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Software Engineer – AI Agents (GCP)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Software Engineer (Java Full Stack)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Software Engineer (Kubernetes)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Solution Architect Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Solution Architect Java Distributed Systems",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Specialist - Product Engineering",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior System Integration Engineer (Level II)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Technical Lead with DevOps",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Technical Product Owner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Technology Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior UiPath Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior WebMethods & EDI consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Windchill Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Senior Workday Integration Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ServiceNow",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ServiceNow & Moveworks AI Solutions Architect / Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ServiceNow Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ServiceNow Developers",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ServiceNow ITSM Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ServiceNow SPM Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "ServiceNow Technical Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Services Senior Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Site Reliability Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Site Reliability Engineer (SRE)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Site Reliability Engineer (SRE) Production Services",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Snowflake Data Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Snowflake Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Snowflake Developer/Admin",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Developer 3",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Developer III",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Developer in Test (SDET)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Developer - Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Engineer in Test (SDET)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Engineer – Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Engineer Java Backend DevOps",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Engineer (Java + Spark)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Engineer With AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software QA Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Quality Engineer - Salesforce Testing",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Solution Architect II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Software Solution Architect II (C3) Solution Governance",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Solution Architect - Java, Cloud & AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Solutions Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Spark Developer with Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Spring Boot Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Spring Boot Senior Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SQL Database Administrator",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr AI/ML Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Data Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr DevOps Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Dot Net Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Front-End Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Full Stack Java Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr full stack Java Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Full Stack Software Engineer / Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java AI Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr java developer with Camunda & GCP",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java Developer with GCP and Golang",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java Full Stack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java Fullstack Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java J2ee Lead Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java J2ee Lead Developer Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Java MS Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Kafka Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Pega Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Pega Developer (CSSA Certified)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr Site Reliability Engineer (SRE)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr SWE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Sr UiPath Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SRE",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SRE / DevOps",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SRE Platform Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "SRE Platform Engineer - Splunk / OCP / Azure",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Staff Engineer I (Java)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Staff Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Study Facilitation Support Executive – UX Researcher",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Supply Chain PM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Supply Chain Production Support Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Swift SDET",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "System Analyst 4",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "System Integration Engineer II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Targeting Systems Analyst",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Team Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Lead API Development & Integration",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Lead Java Microservices",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Lead Java - Onsite",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Lead / Product Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tech Product Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Architect/Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Architect / Modernization Program Liaison",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Coach",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Delivery Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical IAM Program Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Lead – Full Stack",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Lead - Java",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Lead - Java full stack Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Lead – Java Full Stack (Spring Boot)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Lead OneShield",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Lead / Product Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Product Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Product Manager with GenAI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Product Owner",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Production Support Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Program Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Program Manager (TPM)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Project Manager",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Project Manager II",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Project Program",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical Specialist - Mid Level",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technical System Analyst (SaaS Upgrade)",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technology Lead",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technology Project Manager - Cloud & Disaster Recovery",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Technology Specialist - IT Service, Support and Operations | Cloud Platform | Microservices",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Telecom Billing Software Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Test Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Test Automation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Test Automation Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Tester Automation",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "TIBCO Integration & Modernization Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Transmit Security CIAM Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Transmit Security Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Transmit Security Engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UI Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UI Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UI React with AI",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "UI/UX Specialist",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "US Package Consultant - Sap IS Utilities",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "User Experience (UX) engineer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Veeva Vault PromoMats Technical Consultant",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Visualization",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Web Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "WebMethods Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Windchill Solution Architect",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Workday",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Workday Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Workday Financials PM",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Workday Integration Developer",
+      "entity_type": "role"
+    },
+    {
+      "aliases": [],
+      "canonical_name": "Workforce Identity Security Tech Lead / Architect",
+      "entity_type": "role"
+    }
+  ],
+  "schema_version": 1
+}

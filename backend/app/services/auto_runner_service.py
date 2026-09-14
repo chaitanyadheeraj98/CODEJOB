@@ -2,18 +2,66 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from threading import Event, Lock
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app import tenancy
 from app.config import settings
 from app.models import UserSettings
 
 logger = logging.getLogger(__name__)
 
 LIVE_REPLY_CHECK_INTERVAL_SECONDS = 60
+
+# The recovery window is measured in days; checking it hourly is ample.
+PURGE_SWEEP_INTERVAL = timedelta(hours=1)
+TELEGRAM_RETENTION_SWEEP_INTERVAL = timedelta(days=1)
+
+
+@dataclass
+class _Schedule:
+    """When each periodic job is next due, for one tenant.
+
+    These were seven locals in `run_loop`, which was correct while the loop
+    served exactly one owner. Per tenant now, so one account's sync cadence
+    cannot reset another's.
+    """
+
+    next_run_at: datetime
+    next_nvoids_run_at: datetime
+    next_live_check_at: datetime
+    next_reminder_sweep_at: datetime
+    next_resume_tracking_sweep_at: datetime
+    next_relationship_sweep_at: datetime
+    next_scheduling_sweep_at: datetime
+    next_telegram_retention_sweep_at: datetime
+
+    @classmethod
+    def starting_now(cls, owner_id: str) -> "_Schedule":
+        now = datetime.now(UTC)
+        # The live-reply check calls Gmail inline, so every tenant starting it
+        # in the same tick would send N requests a minute at the same instant
+        # into a per-minute quota that already returns 429s for one account.
+        # A stable per-owner offset spreads them across the interval without
+        # any coordination.
+        offset = timedelta(
+            seconds=int(sha256(owner_id.encode()).hexdigest(), 16) % LIVE_REPLY_CHECK_INTERVAL_SECONDS
+        )
+        return cls(
+            next_run_at=now,
+            next_nvoids_run_at=now,
+            next_live_check_at=now + offset,
+            next_reminder_sweep_at=now,
+            next_resume_tracking_sweep_at=now,
+            next_relationship_sweep_at=now,
+            next_scheduling_sweep_at=now,
+            next_telegram_retention_sweep_at=now,
+        )
 
 
 class AutoRunnerService:
@@ -34,8 +82,17 @@ class AutoRunnerService:
         # every existing construction site working, and the feature flag gates
         # the sweep either way.
         run_scheduling_sweep: Callable[[Session], None] = lambda _db: None,
+        run_telegram_retention_sweep: Callable[[Session], None] = lambda _db: None,
         action_lock: Lock,
         stop_event: Event,
+        # Which tenants to service this tick. Injected rather than queried
+        # here so this service keeps knowing nothing about the User model, and
+        # so a test can drive several tenants without a users table.
+        list_owners: Callable[[], list[str]] = lambda: [settings.owner_id],
+        # Whether this process should be the one doing the work. Injected so
+        # the loop's own behaviour can be tested without Redis, and defaulted
+        # so every existing construction site keeps working.
+        is_leader: Callable[[], bool] = lambda: True,
     ) -> None:
         self._session_factory = session_factory
         self._get_settings = get_settings
@@ -46,8 +103,12 @@ class AutoRunnerService:
         self._run_resume_tracking_sweep = run_resume_tracking_sweep
         self._run_relationship_sweep = run_relationship_sweep
         self._run_scheduling_sweep = run_scheduling_sweep
+        self._run_telegram_retention_sweep = run_telegram_retention_sweep
         self._action_lock = action_lock
         self._stop_event = stop_event
+        self._list_owners = list_owners
+        self._is_leader = is_leader
+        self._last_purge_sweep: datetime | None = None
 
     @staticmethod
     def poll_interval_minutes(user_settings: UserSettings) -> int:
@@ -85,131 +146,208 @@ class AutoRunnerService:
         return max(30, min(int(settings.feature_relationship_sweep_interval_minutes or 720), 1440))
 
     def run_loop(self) -> None:
-        next_run_at = datetime.now(UTC)
-        next_nvoids_run_at = datetime.now(UTC)
-        next_live_check_at = datetime.now(UTC)
-        next_reminder_sweep_at = datetime.now(UTC)
-        next_resume_tracking_sweep_at = datetime.now(UTC)
-        next_relationship_sweep_at = datetime.now(UTC)
-        next_scheduling_sweep_at = datetime.now(UTC)
+        schedules: dict[str, _Schedule] = {}
+        was_leader = False
         while not self._stop_event.wait(5):
-            db = self._session_factory()
+            # Claimed or renewed every tick, so a process that starts second
+            # does nothing and a process whose leader died takes over on its
+            # own. Deciding this once at start-up would leave the work stopped
+            # until somebody restarted the survivor.
+            if not self._is_leader():
+                if was_leader:
+                    logger.info("Auto runner lost leadership; standing by")
+                    was_leader = False
+                continue
+            if not was_leader:
+                logger.info("Auto runner is the leader for this deployment")
+                was_leader = True
+            # G3: global, leader-only, and deliberately *not* inside
+            # `tenancy.owner_scope`. The accounts this removes are disabled by
+            # definition, and G1's `owner_scoped` guard skips disabled owners -
+            # so running it as per-owner work would skip exactly the accounts
+            # it exists to remove.
+            self._maybe_purge_due_accounts()
             try:
-                user_settings = self._get_settings(db)
-                if not user_settings.enabled or not user_settings.feature_auto_polling:
-                    next_run_at = datetime.now(UTC)
-                now_utc = datetime.now(UTC)
-
-                # Runs on its own cadence, outside action_lock, so a live count is
-                # visible even while a full sync is in progress under that lock.
-                if user_settings.enabled and now_utc >= next_live_check_at:
-                    try:
-                        self._check_live_replies(db)
-                    except Exception:
-                        logger.exception("Live reply check crashed")
-                    next_live_check_at = datetime.now(UTC) + timedelta(seconds=LIVE_REPLY_CHECK_INTERVAL_SECONDS)
-
-                if user_settings.enabled and user_settings.feature_auto_polling and now_utc >= next_run_at:
-                    interval_minutes = self.poll_interval_minutes(user_settings)
-                    with self._action_lock:
-                        try:
-                            result = self._run_once(None, db)
-                            logger.info(
-                                "Auto runner enqueued: status=%s job_id=%s run_key=%s",
-                                getattr(result, "status", None),
-                                getattr(result, "job_id", None),
-                                getattr(result, "run_key", None),
-                            )
-                        except HTTPException as exc:
-                            logger.warning("Auto runner skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
-                        except Exception:
-                            logger.exception("Auto runner crashed during run-once")
-                    next_run_at = datetime.now(UTC) + timedelta(minutes=interval_minutes)
-
-                if user_settings.enabled and user_settings.feature_nvoids_enabled and user_settings.feature_nvoids_auto_sync and now_utc >= next_nvoids_run_at:
-                    nvoids_interval_minutes = self.nvoids_poll_interval_minutes(user_settings)
-                    nvoids_limit = self.nvoids_batch_limit(user_settings)
-                    with self._action_lock:
-                        try:
-                            result = self._run_nvoids_once(db, nvoids_limit)
-                            logger.info(
-                                "Auto nvoids sync enqueued: status=%s job_id=%s run_key=%s",
-                                getattr(result, "status", None),
-                                getattr(result, "job_id", None),
-                                getattr(result, "run_key", None),
-                            )
-                        except HTTPException as exc:
-                            logger.warning("Auto nvoids sync skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
-                        except Exception:
-                            logger.exception("Auto nvoids sync crashed")
-                    next_nvoids_run_at = datetime.now(UTC) + timedelta(minutes=nvoids_interval_minutes)
-
-                if (
-                    user_settings.enabled
-                    and user_settings.feature_applications_enabled
-                    and user_settings.feature_application_automation_enabled
-                    and now_utc >= next_reminder_sweep_at
-                ):
-                    reminder_interval_minutes = self.reminder_sweep_interval_minutes(user_settings)
-                    with self._action_lock:
-                        try:
-                            self._run_reminder_sweep(db)
-                        except Exception:
-                            logger.exception("Reminder sweep crashed")
-                    next_reminder_sweep_at = datetime.now(UTC) + timedelta(minutes=reminder_interval_minutes)
-
-                if (
-                    user_settings.enabled
-                    and user_settings.feature_resume_tracking_enabled
-                    and now_utc >= next_resume_tracking_sweep_at
-                ):
-                    resume_tracking_interval_minutes = self.resume_tracking_sweep_interval_minutes(user_settings)
-                    with self._action_lock:
-                        try:
-                            self._run_resume_tracking_sweep(db)
-                        except Exception:
-                            logger.exception("Resume tracking sweep crashed")
-                    next_resume_tracking_sweep_at = datetime.now(UTC) + timedelta(
-                        minutes=resume_tracking_interval_minutes
-                    )
-
-                # Entity embedding top-up, then one clustering pass. Both are
-                # idempotent and resumable, both take the action lock as their
-                # neighbours do, and the clustering pass writes shadow rows
-                # unless surfacing has been explicitly enabled and the
-                # thresholds calibrated.
-                if (
-                    user_settings.enabled
-                    and settings.feature_relationship_intelligence_enabled
-                    and now_utc >= next_relationship_sweep_at
-                ):
-                    relationship_interval_minutes = self.relationship_sweep_interval_minutes()
-                    with self._action_lock:
-                        try:
-                            self._run_relationship_sweep(db)
-                        except Exception:
-                            logger.exception("Relationship sweep crashed")
-                    next_relationship_sweep_at = datetime.now(UTC) + timedelta(
-                        minutes=relationship_interval_minutes
-                    )
-
-                # Expire, warn, enqueue, suspend. Runs in the API process; the
-                # work it enqueues runs in the worker.
-                if (
-                    user_settings.enabled
-                    and settings.feature_scheduling_enabled
-                    and now_utc >= next_scheduling_sweep_at
-                ):
-                    scheduling_interval_minutes = self.scheduling_sweep_interval_minutes(user_settings)
-                    with self._action_lock:
-                        try:
-                            self._run_scheduling_sweep(db)
-                        except Exception:
-                            logger.exception("Scheduling sweep crashed")
-                    next_scheduling_sweep_at = datetime.now(UTC) + timedelta(
-                        minutes=scheduling_interval_minutes
-                    )
+                owners = list(self._list_owners())
             except Exception:
-                logger.exception("Auto runner loop error")
-            finally:
-                db.close()
+                logger.exception("Auto runner could not list owners")
+                continue
+            # Tenants that went away stop being scheduled, so this cannot grow
+            # without bound on a long-running process.
+            for gone in set(schedules) - set(owners):
+                schedules.pop(gone, None)
+            for owner_id in owners:
+                schedule = schedules.setdefault(owner_id, _Schedule.starting_now(owner_id))
+                try:
+                    # Everything below resolves the tenant through
+                    # `tenancy.owner_id()`. Without this scope the thread has
+                    # no request context, so every tenant's automation ran as
+                    # the configured fallback owner - which meant only that one
+                    # account was ever serviced.
+                    with tenancy.owner_scope(owner_id):
+                        self._run_owner_tick(owner_id, schedule)
+                except Exception:
+                    # One tenant's failure must not stop the other ninety-nine.
+                    logger.exception("Auto runner tick failed owner=%s", owner_id)
+
+    def _maybe_purge_due_accounts(self) -> None:
+        """Drain accounts whose 30-day recovery window has closed.
+
+        Hourly rather than every tick: the window is measured in days, so
+        checking it more often buys nothing and a deletion is the last thing
+        that should run in a tight loop. Failures are logged and the sweep is
+        retried next hour - a purge that could not finish left the account
+        intact, by construction.
+        """
+        now = datetime.now(UTC)
+        if self._last_purge_sweep and now - self._last_purge_sweep < PURGE_SWEEP_INTERVAL:
+            return
+        self._last_purge_sweep = now
+
+        from app.services import account_purge_service
+
+        db = self._session_factory()
+        try:
+            purged = account_purge_service.purge_due_accounts(db)
+            if purged:
+                logger.info(
+                    "account_purge_sweep_completed accounts=%s rows=%s",
+                    len(purged), sum(result.rows for result in purged),
+                )
+        except Exception:
+            logger.exception("account_purge_sweep_failed")
+        finally:
+            db.close()
+
+    def _run_owner_tick(self, owner_id: str, schedule: _Schedule) -> None:
+        db = self._session_factory()
+        try:
+            user_settings = self._get_settings(db)
+            if not user_settings.enabled or not user_settings.feature_auto_polling:
+                schedule.next_run_at = datetime.now(UTC)
+            now_utc = datetime.now(UTC)
+
+            if (
+                user_settings.enabled
+                and settings.feature_telegram_chat_enabled
+                and now_utc >= schedule.next_telegram_retention_sweep_at
+            ):
+                try:
+                    self._run_telegram_retention_sweep(db)
+                except Exception:
+                    logger.exception("Telegram chat retention sweep crashed")
+                schedule.next_telegram_retention_sweep_at = datetime.now(UTC) + TELEGRAM_RETENTION_SWEEP_INTERVAL
+
+            # Runs on its own cadence, outside action_lock, so a live count is
+            # visible even while a full sync is in progress under that lock.
+            if user_settings.enabled and now_utc >= schedule.next_live_check_at:
+                try:
+                    self._check_live_replies(db)
+                except Exception:
+                    logger.exception("Live reply check crashed")
+                schedule.next_live_check_at = datetime.now(UTC) + timedelta(seconds=LIVE_REPLY_CHECK_INTERVAL_SECONDS)
+
+            if user_settings.enabled and user_settings.feature_auto_polling and now_utc >= schedule.next_run_at:
+                interval_minutes = self.poll_interval_minutes(user_settings)
+                with self._action_lock:
+                    try:
+                        result = self._run_once(None, db)
+                        logger.info(
+                            "Auto runner enqueued: owner=%s status=%s job_id=%s run_key=%s",
+                            owner_id,
+                            getattr(result, "status", None),
+                            getattr(result, "job_id", None),
+                            getattr(result, "run_key", None),
+                        )
+                    except HTTPException as exc:
+                        logger.warning("Auto runner skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
+                    except Exception:
+                        logger.exception("Auto runner crashed during run-once")
+                schedule.next_run_at = datetime.now(UTC) + timedelta(minutes=interval_minutes)
+
+            if user_settings.enabled and user_settings.feature_nvoids_enabled and user_settings.feature_nvoids_auto_sync and now_utc >= schedule.next_nvoids_run_at:
+                nvoids_interval_minutes = self.nvoids_poll_interval_minutes(user_settings)
+                nvoids_limit = self.nvoids_batch_limit(user_settings)
+                with self._action_lock:
+                    try:
+                        result = self._run_nvoids_once(db, nvoids_limit)
+                        logger.info(
+                            "Auto nvoids sync enqueued: owner=%s status=%s job_id=%s run_key=%s",
+                            owner_id,
+                            getattr(result, "status", None),
+                            getattr(result, "job_id", None),
+                            getattr(result, "run_key", None),
+                        )
+                    except HTTPException as exc:
+                        logger.warning("Auto nvoids sync skipped/failed: status=%s detail=%s", exc.status_code, exc.detail)
+                    except Exception:
+                        logger.exception("Auto nvoids sync crashed")
+                schedule.next_nvoids_run_at = datetime.now(UTC) + timedelta(minutes=nvoids_interval_minutes)
+
+            if (
+                user_settings.enabled
+                and user_settings.feature_applications_enabled
+                and user_settings.feature_application_automation_enabled
+                and now_utc >= schedule.next_reminder_sweep_at
+            ):
+                reminder_interval_minutes = self.reminder_sweep_interval_minutes(user_settings)
+                with self._action_lock:
+                    try:
+                        self._run_reminder_sweep(db)
+                    except Exception:
+                        logger.exception("Reminder sweep crashed")
+                schedule.next_reminder_sweep_at = datetime.now(UTC) + timedelta(minutes=reminder_interval_minutes)
+
+            if (
+                user_settings.enabled
+                and user_settings.feature_resume_tracking_enabled
+                and now_utc >= schedule.next_resume_tracking_sweep_at
+            ):
+                resume_tracking_interval_minutes = self.resume_tracking_sweep_interval_minutes(user_settings)
+                with self._action_lock:
+                    try:
+                        self._run_resume_tracking_sweep(db)
+                    except Exception:
+                        logger.exception("Resume tracking sweep crashed")
+                schedule.next_resume_tracking_sweep_at = datetime.now(UTC) + timedelta(
+                    minutes=resume_tracking_interval_minutes
+                )
+
+            # Entity embedding top-up, then one clustering pass. Both are
+            # idempotent and resumable, both take the action lock as their
+            # neighbours do, and the clustering pass writes shadow rows
+            # unless surfacing has been explicitly enabled and the
+            # thresholds calibrated.
+            if (
+                user_settings.enabled
+                and settings.feature_relationship_intelligence_enabled
+                and now_utc >= schedule.next_relationship_sweep_at
+            ):
+                relationship_interval_minutes = self.relationship_sweep_interval_minutes()
+                with self._action_lock:
+                    try:
+                        self._run_relationship_sweep(db)
+                    except Exception:
+                        logger.exception("Relationship sweep crashed")
+                schedule.next_relationship_sweep_at = datetime.now(UTC) + timedelta(
+                    minutes=relationship_interval_minutes
+                )
+
+            # Expire, warn, enqueue, suspend. Runs in the API process; the
+            # work it enqueues runs in the worker.
+            if (
+                user_settings.enabled
+                and settings.feature_scheduling_enabled
+                and now_utc >= schedule.next_scheduling_sweep_at
+            ):
+                scheduling_interval_minutes = self.scheduling_sweep_interval_minutes(user_settings)
+                with self._action_lock:
+                    try:
+                        self._run_scheduling_sweep(db)
+                    except Exception:
+                        logger.exception("Scheduling sweep crashed")
+                schedule.next_scheduling_sweep_at = datetime.now(UTC) + timedelta(
+                    minutes=scheduling_interval_minutes
+                )
+        finally:
+            db.close()
