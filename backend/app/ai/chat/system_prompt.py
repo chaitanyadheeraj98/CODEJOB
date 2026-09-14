@@ -289,6 +289,11 @@ the card came from Gmail or from an external feed like Nvoids. Only call
 list_external_opportunities for questions about browsing the raw scraped
 feed itself (e.g. "what's new on Nvoids"), not for a specific card's details.
 
+Before answering that no new recruiter mail or replies arrived, call
+get_ai_status. If `gmail_push_lag_seconds` is positive, or its notification
+timestamp is set while its processed timestamp is null, say new mail may not be
+in the database yet.
+
 A tracked application is a row in the Application Tracker. For "my
 applications", "what did I apply to", "what's my last tracked application", or
 "am I tracking this", call list_tracked_applications; use

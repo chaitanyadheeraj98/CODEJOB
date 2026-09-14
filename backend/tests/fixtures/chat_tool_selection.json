@@ -313,5 +313,12 @@
     "expected": [
       "search_opportunities"
     ]
+  },
+  {
+    "id": "new_recruiter_mail_freshness",
+    "question": "Did anything new come in from recruiters?",
+    "expected": [
+      "get_ai_status"
+    ]
   }
 ]

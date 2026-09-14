@@ -41,6 +41,7 @@ from app.models import (
     CandidateRecord,
     EmailConversation,
     EmailReplyMessage,
+    GmailCredential,
     GmailLabel,
     GmailRequirementGroup,
     NumberReviewQueue,
@@ -416,6 +417,9 @@ class MCPServerToolTests(unittest.TestCase):
 
         status = get_ai_status()
         self.assertIn("chat_model", status)
+        self.assertIsNone(status["gmail_last_notification_at"])
+        self.assertIsNone(status["gmail_last_event_processed_at"])
+        self.assertIsNone(status["gmail_push_lag_seconds"])
         summary = get_settings_summary()
         self.assertEqual(summary["qualification_threshold"], 0.6)
         self.assertEqual(summary["attachments"][0]["file_name"], "cover_letter.pdf")
@@ -462,6 +466,36 @@ class MCPServerToolTests(unittest.TestCase):
         with self.SessionLocal() as db:
             self.assertEqual(db.query(RecruiterEmail).count(), 2)
             self.assertEqual(db.query(EmailReplyMessage).count(), 1)
+
+    def test_ai_status_reports_gmail_push_lag(self) -> None:
+        with self.SessionLocal() as db:
+            db.add(
+                GmailCredential(
+                    owner_id=settings.owner_id,
+                    gmail_last_notification_at=datetime(2026, 9, 14, 12, 0, 30, tzinfo=UTC),
+                    gmail_last_event_processed_at=datetime(2026, 9, 14, 12, 0, 0, tzinfo=UTC),
+                )
+            )
+            db.commit()
+
+        lagging = get_ai_status()
+        self.assertEqual(lagging["gmail_push_lag_seconds"], 30)
+        self.assertEqual(lagging["gmail_last_notification_at"], "2026-09-14T12:00:30+00:00")
+        self.assertEqual(lagging["gmail_last_event_processed_at"], "2026-09-14T12:00:00+00:00")
+
+        with self.SessionLocal() as db:
+            credential = db.query(GmailCredential).filter_by(owner_id=settings.owner_id).one()
+            credential.gmail_last_event_processed_at = credential.gmail_last_notification_at
+            db.commit()
+        self.assertEqual(get_ai_status()["gmail_push_lag_seconds"], 0)
+
+        with self.SessionLocal() as db:
+            credential = db.query(GmailCredential).filter_by(owner_id=settings.owner_id).one()
+            credential.gmail_last_event_processed_at = None
+            db.commit()
+        missing_processed = get_ai_status()
+        self.assertIsNone(missing_processed["gmail_push_lag_seconds"])
+        self.assertIsNotNone(missing_processed["gmail_last_notification_at"])
 
     def test_label_tools_filter_owner_tracking_and_untrusted_names(self) -> None:
         with self.SessionLocal() as db:

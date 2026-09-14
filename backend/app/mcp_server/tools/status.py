@@ -2,13 +2,30 @@ from __future__ import annotations
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import AttachmentAsset, GmailRequirementGroup, UserSettings
+from app.models import AttachmentAsset, GmailCredential, GmailRequirementGroup, UserSettings
 from app.runtime_state import runtime_state
 from app import tenancy
 
 
 def get_ai_status() -> dict[str, object]:
     """Return non-secret AI provider runtime health for this CodeJob process."""
+    db = SessionLocal()
+    try:
+        credential = (
+            db.query(GmailCredential)
+            .filter(GmailCredential.owner_id == tenancy.owner_id())
+            .first()
+        )
+        notification_at = credential.gmail_last_notification_at if credential else None
+        processed_at = credential.gmail_last_event_processed_at if credential else None
+    finally:
+        db.close()
+    gmail_push_lag_seconds = None
+    if notification_at is not None and processed_at is not None:
+        gmail_push_lag_seconds = max(
+            0,
+            int((notification_at - processed_at).total_seconds()),
+        )
     return {
         "chat_enabled": settings.feature_chat_enabled,
         "chat_model": runtime_state.chat_active_model or settings.ollama_chat_model,
@@ -21,6 +38,9 @@ def get_ai_status() -> dict[str, object]:
         "groq_last_success_at": (
             runtime_state.groq_last_success_at.isoformat() if runtime_state.groq_last_success_at else None
         ),
+        "gmail_last_notification_at": notification_at.isoformat() if notification_at else None,
+        "gmail_last_event_processed_at": processed_at.isoformat() if processed_at else None,
+        "gmail_push_lag_seconds": gmail_push_lag_seconds,
     }
 
 
