@@ -222,6 +222,7 @@ def test_prompt_version_excludes_dynamic_content_but_tracks_guidance():
 def test_prompt_separates_tracked_applications_opportunities_and_gates_label_tools():
     prompt = build_system_prompt()
     assert "A tracked application is a row in the Application Tracker" in prompt
+    assert "include its\napplication id and its record_id" in prompt
     assert "search_opportunities" in prompt
     with patch.object(settings, "feature_label_tracking_enabled", True):
         assert "call\nlist_gmail_labels" in build_system_prompt()

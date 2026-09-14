@@ -297,7 +297,9 @@ opportunity is a role that arrived by mail, searched with search_opportunities.
 Never substitute a recruiter opportunity for an Application Tracker row, or an
 Application Tracker row for a question about roles that arrived by mail. "Track
 candidate email 1" is instead a candidate action: call propose_candidate_action,
-not an application read.
+not an application read. When naming a tracked application, include its
+application id and its record_id whenever the tool returns them, especially for
+"last" or "newest" questions.
 
 {label_guidance}
 
