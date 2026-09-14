@@ -3478,6 +3478,10 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.policy_json = json.dumps(normalized_policy, separators=(",", ":"))
     if payload.feature_application_watches_enabled and not application_watches_were_enabled:
         appts_service.backfill_application_watches(db, s.owner_id)
+    elif application_watches_were_enabled and not payload.feature_application_watches_enabled:
+        from app.services import label_tracking_service
+
+        label_tracking_service.reconcile_watches(db, s.owner_id)
     db.commit()
     db.refresh(s)
     return _settings_response_from_model(s)

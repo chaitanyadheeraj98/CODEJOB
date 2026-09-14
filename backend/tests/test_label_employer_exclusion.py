@@ -28,7 +28,11 @@ def db():
 
 
 def _settings(db, employer_domains=""):
-    db.add(UserSettings(owner_id="a", employer_domains=employer_domains))
+    db.add(UserSettings(
+        owner_id="a",
+        employer_domains=employer_domains,
+        feature_application_watches_enabled=True,
+    ))
     db.flush()
 
 

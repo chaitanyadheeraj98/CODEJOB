@@ -7,7 +7,7 @@ from email.utils import getaddresses, parseaddr
 
 from sqlalchemy.orm import Session
 
-from app.models import RecruiterWatch, TrackedThread, EmailReplyMessage, EmailConversation, RecruiterEmail, AppTSApplication
+from app.models import RecruiterWatch, TrackedThread, EmailReplyMessage, EmailConversation, RecruiterEmail, AppTSApplication, UserSettings
 from app.config import settings
 from app.services import email_inbox_service, gmail_label_service
 
@@ -401,11 +401,18 @@ def reconcile_watches(db: Session, owner_id: str) -> int:
     active_threads = {row.external_thread_id for row in db.query(TrackedThread).filter(
         TrackedThread.owner_id == owner_id, TrackedThread.untracked_at.is_(None),
     ) if json.loads(row.label_external_ids_json)}
-    live_applications = {row.id for row in db.query(AppTSApplication.id).filter(
-        AppTSApplication.owner_id == owner_id,
-        AppTSApplication.deleted_at.is_(None),
-        AppTSApplication.status.not_in(APPLICATION_WATCH_TERMINAL_STATUSES),
-    )}
+    application_watches_enabled = bool(db.query(UserSettings.feature_application_watches_enabled).filter(
+        UserSettings.owner_id == owner_id,
+    ).scalar())
+    live_applications = (
+        {row.id for row in db.query(AppTSApplication.id).filter(
+            AppTSApplication.owner_id == owner_id,
+            AppTSApplication.deleted_at.is_(None),
+            AppTSApplication.status.not_in(APPLICATION_WATCH_TERMINAL_STATUSES),
+        )}
+        if application_watches_enabled
+        else set()
+    )
     released = 0
     employers = _employer_domains(db, owner_id)
     for watch in db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == owner_id, RecruiterWatch.released_at.is_(None)):

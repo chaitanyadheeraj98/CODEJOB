@@ -149,7 +149,9 @@ class OrchestrationService:
         self.deps = deps
 
     def _sync_label_tracking(self, db: Session, user_settings: UserSettings) -> tuple[int, int, int]:
-        if not (app_settings.feature_label_tracking_enabled and user_settings.feature_label_tracking_enabled):
+        labels_enabled = bool(app_settings.feature_label_tracking_enabled and user_settings.feature_label_tracking_enabled)
+        watches_enabled = bool(labels_enabled or user_settings.feature_application_watches_enabled)
+        if not watches_enabled:
             return 0, 0, 0
         from types import SimpleNamespace
         from app import gmail_client
@@ -162,13 +164,15 @@ class OrchestrationService:
         owner_email = user_settings.signature_email or DEFAULT_SIGNATURE_EMAIL
         messages = threads = 0
         errors = 0
-        for index, step in enumerate((
+        steps = ([
             lambda: self.sync_gmail_labels(db),
             lambda: label_tracking_service.reconcile_untracked(db, self.deps.owner_id, deps=deps),
             lambda: label_tracking_service.sync_tracked_labels(db, self.deps.owner_id, deps=deps, owner_email=owner_email),
+        ] if labels_enabled else []) + [
             lambda: label_tracking_service.sync_watch_matches(db, self.deps.owner_id, deps=deps, owner_email=owner_email, max_messages=max(0, app_settings.label_tracking_max_messages_per_sync - messages)),
-        )):
-            if index == 3 and errors:
+        ]
+        for index, step in enumerate(steps):
+            if labels_enabled and index == 3 and errors:
                 continue
             try:
                 with db.begin_nested():

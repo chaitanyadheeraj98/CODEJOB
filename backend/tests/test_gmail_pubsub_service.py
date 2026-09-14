@@ -714,7 +714,7 @@ if __name__ == "__main__":
 
 
 class ConsumerTests(_Base):
-    """Two features consume Gmail change events, switched independently.
+    """Three features consume Gmail change events, switched independently.
 
     Conflating them is how this went wrong in production: eligibility asked
     only about the Reply Inbox, so an account with label tracking on and the
@@ -723,10 +723,11 @@ class ConsumerTests(_Base):
     so. These tests exist because that shipped.
     """
 
-    def _flags(self, *, replies: bool, labels: bool, global_labels: bool = True):
+    def _flags(self, *, replies: bool, labels: bool, watches: bool = False, global_labels: bool = True):
         row = self.db.query(UserSettings).filter(UserSettings.owner_id == OWNER).one()
         row.feature_reply_inbox_enabled = replies
         row.feature_label_tracking_enabled = labels
+        row.feature_application_watches_enabled = watches
         self.db.commit()
         return patch.object(settings, "feature_label_tracking_enabled", global_labels)
 
@@ -738,6 +739,10 @@ class ConsumerTests(_Base):
 
     def test_the_reply_inbox_alone_is_enough_to_earn_a_watch(self):
         with self._flags(replies=True, labels=False):
+            self.assertEqual(service.owners_due_for_watch(self.db), [OWNER])
+
+    def test_application_watches_alone_are_enough_to_earn_a_watch(self):
+        with self._flags(replies=False, labels=False, watches=True, global_labels=False):
             self.assertEqual(service.owners_due_for_watch(self.db), [OWNER])
 
     def test_neither_consumer_earns_nothing(self):
@@ -753,9 +758,11 @@ class ConsumerTests(_Base):
 
     def test_consumers_reports_each_switch_separately(self):
         with self._flags(replies=True, labels=False):
-            self.assertEqual(service.consumers(self.db, OWNER), (True, False))
+            self.assertEqual(service.consumers(self.db, OWNER), (True, False, False))
         with self._flags(replies=False, labels=True):
-            self.assertEqual(service.consumers(self.db, OWNER), (False, True))
+            self.assertEqual(service.consumers(self.db, OWNER), (False, True, True))
+        with self._flags(replies=False, labels=False, watches=True):
+            self.assertEqual(service.consumers(self.db, OWNER), (False, False, True))
 
     def test_a_label_only_mailbox_does_not_capture_replies(self):
         """A watch registered for one feature must not quietly do the other's

@@ -92,6 +92,7 @@ def test_reconcile_removal_multiple_labels_and_incomplete_scan(db):
 
 
 def test_application_source_survives_until_the_application_is_terminal(db):
+    db.add(UserSettings(owner_id="a", feature_application_watches_enabled=True))
     app = application(db)
     watch = RecruiterWatch(
         owner_id="a", watch_type="address", value="recruiter@example.com",
@@ -166,6 +167,30 @@ def test_orchestrator_dark_gate_and_failure_isolation(db, monkeypatch):
     with patch.object(pipeline, "sync_gmail_labels", side_effect=RuntimeError("offline")):
         assert pipeline._sync_label_tracking(db, user)[2] == 1
     deps.list_candidates_by_query.assert_not_called()
+
+
+def test_application_watches_sync_without_label_tracking(db, monkeypatch):
+    deps = SimpleNamespace(
+        owner_id="a",
+        list_gmail_labels=Mock(),
+        list_candidates_by_label_ids=Mock(),
+        list_thread_ids_by_label=Mock(),
+        list_candidates_by_query=Mock(return_value=[]),
+    )
+    user = UserSettings(
+        owner_id="a",
+        feature_label_tracking_enabled=False,
+        feature_application_watches_enabled=True,
+        signature_email="me@gmail.com",
+    )
+    db.add(RecruiterWatch(owner_id="a", watch_type="address", value="recruiter@example.com"))
+    db.flush()
+    monkeypatch.setattr(settings, "feature_label_tracking_enabled", False)
+
+    assert OrchestrationService(deps)._sync_label_tracking(db, user) == (0, 0, 0)
+    deps.list_candidates_by_query.assert_called_once()
+    deps.list_gmail_labels.assert_not_called()
+    deps.list_candidates_by_label_ids.assert_not_called()
 
 
 def test_shared_infrastructure_domains_never_become_domain_watches():

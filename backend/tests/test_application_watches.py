@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import Base
 from app.models import AppTSApplication, RecruiterWatch, ResumeAsset, UserSettings
-from app.services import application_service, appts_service
+from app.services import application_service, appts_service, label_tracking_service
 
 
 @pytest.fixture
@@ -151,3 +151,14 @@ def test_backfill_is_flag_gated_live_only_and_idempotent(db):
     assert sum(corporate.id in provenance for provenance in provenances) == 2
     assert sum(freemail.id in provenance for provenance in provenances) == 1
     assert all(terminal.id not in provenance and deleted.id not in provenance for provenance in provenances)
+
+
+def test_disabling_flag_releases_application_only_watches(db):
+    user_settings = add_settings(db)
+    application = add_application(db)
+    appts_service.derive_application_watches(db, "a", application)
+
+    user_settings.feature_application_watches_enabled = False
+
+    assert label_tracking_service.reconcile_watches(db, "a") == 2
+    assert db.query(RecruiterWatch).filter(RecruiterWatch.released_at.is_(None)).count() == 0

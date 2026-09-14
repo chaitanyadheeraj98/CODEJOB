@@ -107,8 +107,8 @@ class HistoryOutcome:
 # --- eligibility --------------------------------------------------------
 
 
-def consumers(db: Session, owner_id: str) -> tuple[bool, bool]:
-    """Which features would use a Gmail change event: (replies, labels).
+def consumers(db: Session, owner_id: str) -> tuple[bool, bool, bool]:
+    """Which features would use a Gmail change event: (replies, labels, watches).
 
     Two consumers, switched independently, and conflating them is how this
     went wrong once already: eligibility asked only about the Reply Inbox, so
@@ -124,13 +124,14 @@ def consumers(db: Session, owner_id: str) -> tuple[bool, bool]:
         db.query(UserSettings).filter(UserSettings.owner_id == owner_id).first()
     )
     if user_settings is None:
-        return False, False
+        return False, False, False
     replies = bool(user_settings.feature_reply_inbox_enabled)
     labels = bool(
         settings.feature_label_tracking_enabled
         and user_settings.feature_label_tracking_enabled
     )
-    return replies, labels
+    watches = bool(labels or user_settings.feature_application_watches_enabled)
+    return replies, labels, watches
 
 
 def _ineligible(db: Session, owner_id: str) -> str:
@@ -573,14 +574,14 @@ def _capture_batch(owner_id: str, items: list) -> int:
     new_reply_ids: list[str] = []
     with session_scope() as db:
         owner_email = _owner_email(db, owner_id)
-        replies_on, labels_on = consumers(db, owner_id)
+        replies_on, labels_on, watches_on = consumers(db, owner_id)
         # Empty rather than conditional branches further down: with no tracked
         # labels and no watches, the label and watch paths are already no-ops.
         tracked_label_ids = {
             label.external_label_id
             for label in gmail_label_service.list_labels(db, owner_id, tracked_only=True)
         } if labels_on else set()
-        watches = label_tracking_service.active_watches(db, owner_id) if labels_on else []
+        watches = label_tracking_service.active_watches(db, owner_id) if watches_on else []
         for item in items:
             try:
                 with db.begin_nested():
