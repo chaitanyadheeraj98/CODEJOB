@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ApplicationCard } from '../premium_numbers/types'
-import { toJourney } from './journey'
+import { APPLICATION_STATUSES, legalActions, toJourney } from './journey'
 
 function application(overrides: Partial<ApplicationCard> = {}): ApplicationCard {
   return {
@@ -59,5 +59,26 @@ describe('toJourney', () => {
     const withoutMilestones = toJourney(application({ status: 'resume_shared' }))
     const withMilestones = toJourney(application({ status: 'resume_shared', milestones_reached: { hired: '2026-01-05T00:00:00Z' } }))
     expect(withMilestones.map((node) => node.id)).toEqual(withoutMilestones.map((node) => node.id))
+  })
+})
+
+describe('legalActions', () => {
+  it('returns a non-throwing action list for every status', () => {
+    for (const status of APPLICATION_STATUSES) expect(legalActions(application({ status })).length).toBeGreaterThan(0)
+  })
+
+  it('never offers submitted_to_client as a plain status action', () => {
+    for (const status of APPLICATION_STATUSES) {
+      expect(legalActions(application({ status })).some((candidate) => candidate.label === 'Submitted to Client')).toBe(false)
+    }
+  })
+
+  it.each(['hired', 'rejected', 'withdrawn', 'no_response', 'position_closed', 'duplicate'] as const)('%s offers Add Note only', (status) => {
+    expect(legalActions(application({ status })).map((candidate) => candidate.kind)).toEqual(['add_note'])
+  })
+
+  it('offers Submit to Client only after RTR confirmation', () => {
+    expect(legalActions(application({ status: 'rtr_confirmed' })).map((candidate) => candidate.kind)).toContain('submit_to_client')
+    expect(legalActions(application({ status: 'rtr_requested' })).map((candidate) => candidate.kind)).not.toContain('submit_to_client')
   })
 })

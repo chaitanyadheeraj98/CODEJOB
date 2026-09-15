@@ -1,5 +1,8 @@
+import { useState } from 'react'
+
 import type { ApplicationCard } from '../premium_numbers/types'
-import { toJourney } from './journey'
+import JourneyPanel from './JourneyPanel'
+import { legalActions, toJourney, type JourneyAction } from './journey'
 
 function dateTimeLabel(value: string | null): string {
   if (!value) return 'Unscheduled'
@@ -9,6 +12,9 @@ function dateTimeLabel(value: string | null): string {
 
 export default function JourneyColumn({ application }: { application: ApplicationCard }) {
   const nodes = toJourney(application)
+  const actions = legalActions(application)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [selectedAction, setSelectedAction] = useState<JourneyAction | null>(null)
 
   return (
     <section className="applicationJourney" aria-label="Application journey">
@@ -26,6 +32,19 @@ export default function JourneyColumn({ application }: { application: Applicatio
           </li>
         ))}
       </ol>
+      {actions.length ? (
+        <div className="applicationJourneyAdd">
+          <button type="button" className="applicationJourneyAddButton" aria-label="Add journey action" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>+</button>
+          {menuOpen ? (
+            <div className="applicationJourneyActions" role="menu">
+              {actions.map((journeyAction) => (
+                <button key={journeyAction.kind} type="button" role="menuitem" onClick={() => { setSelectedAction(journeyAction); setMenuOpen(false) }}>{journeyAction.label}</button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {selectedAction ? <JourneyPanel action={selectedAction} onClose={() => setSelectedAction(null)} /> : null}
     </section>
   )
 }
