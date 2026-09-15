@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 
 import type { ApplicationCard, ApplicationDuplicateSummary, ApplicationInterview, ApplicationStatus } from '../premium_numbers/types'
 import {
@@ -60,6 +60,8 @@ export default function JourneyPanel({ application, action, node, duplicateConfl
   const [closeStatus, setCloseStatus] = useState<ApplicationStatus>('rejected')
   const [closedReason, setClosedReason] = useState('')
   const [closedReasonCode, setClosedReasonCode] = useState('')
+
+  useEffect(() => { panelRef.current?.focus() }, [])
 
   const fail = (reason: unknown) => {
     const message = reason instanceof RoleManifestForkRequiredError
@@ -199,7 +201,7 @@ export default function JourneyPanel({ application, action, node, duplicateConfl
   }
 
   return (
-    <div className="detailPanelOverlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="detailPanelOverlay journeyPanelOverlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div ref={panelRef} className="detailPanel journeyPanel" role="dialog" aria-modal="true" aria-label={action?.label ?? node?.title ?? 'Journey details'} tabIndex={-1} onKeyDown={handleKeyDown}>
         <header className="detailPanelHeader">
           <div><p className="detailPanelEyebrow">Application journey</p><h3>{action?.label ?? node?.title}</h3></div>

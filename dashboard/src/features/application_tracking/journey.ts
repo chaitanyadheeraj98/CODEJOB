@@ -106,7 +106,6 @@ export function toJourney(application: ApplicationCard): JourneyNode[] {
     seenStatusIds.add(baseId)
     const movedBackwards = Boolean(
       from
-      && typeof parsed.trigger === 'string'
       && APPLICATION_STATUSES.indexOf(to) < APPLICATION_STATUSES.indexOf(from),
     )
     statusNodes.push({
@@ -118,7 +117,7 @@ export function toJourney(application: ApplicationCard): JourneyNode[] {
       detail: {
         ...statusDetail(application, to),
         ...(from ? { from } : {}),
-        ...(typeof parsed.trigger === 'string' ? { trigger: parsed.trigger } : {}),
+        ...(typeof parsed.trigger === 'string' ? { trigger: parsed.trigger } : movedBackwards ? { trigger: 'user_correction' } : {}),
       },
       parentId: null,
     })

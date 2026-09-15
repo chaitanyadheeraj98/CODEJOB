@@ -4536,8 +4536,7 @@ button.emailSearchResult:focus-visible {
   background: var(--surface-soft);
 }
 
-.resumeLockPicker > label,
-.applicationEventForm label {
+.resumeLockPicker > label {
   display: grid;
   gap: 5px;
   color: var(--muted);
@@ -4547,26 +4546,6 @@ button.emailSearchResult:focus-visible {
 
 .resumeLockPicker p {
   margin: 0;
-}
-
-.applicationTimeline ol {
-  display: grid;
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.applicationTimeline li {
-  display: grid;
-  gap: 3px;
-  padding-left: 12px;
-  border-left: 3px solid #c4d4f7;
-}
-
-.applicationTimeline li p {
-  margin: 2px 0 0;
-  white-space: pre-wrap;
 }
 
 .applicationJourney {
@@ -4630,11 +4609,6 @@ button.emailSearchResult:focus-visible {
 .applicationJourneyNode--failed .applicationJourneyMarker {
   border-color: #c44848;
   color: #a62f2f;
-}
-
-.applicationJourneyNode--corrected > div {
-  text-decoration: line-through;
-  opacity: .7;
 }
 
 .applicationJourneyNode--corrected .applicationJourneyNodeButton {
@@ -4705,21 +4679,6 @@ button.emailSearchResult:focus-visible {
   max-width: 540px;
 }
 
-.applicationEventForm {
-  display: grid;
-  gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-
-.applicationEventForm button {
-  width: fit-content;
-}
-
-.applicationWorkflowPanel {
-  padding: 0 0 14px;
-}
-
 .applicationDraftPanel textarea {
   min-height: 150px;
   resize: vertical;
@@ -4750,15 +4709,12 @@ button.emailSearchResult:focus-visible {
   gap: 8px;
 }
 
-.applicationInterviewList,
-.applicationInterviewRow,
 .duplicateConflict,
 .opportunityJobDetails > .detailFormGrid {
   display: grid;
   gap: 10px;
 }
 
-.applicationInterviewRow,
 .duplicateConflict {
   padding: 12px;
   border: 1px solid var(--line);
@@ -4766,7 +4722,6 @@ button.emailSearchResult:focus-visible {
   background: var(--surface);
 }
 
-.applicationInterviewRow > p,
 .duplicateConflict > p,
 .duplicateConflict > ul {
   margin: 0;
@@ -4822,6 +4777,17 @@ button.emailSearchResult:focus-visible {
 @media (max-width: 640px) {
   .mergePreviewGrid {
     grid-template-columns: 1fr;
+  }
+
+  .journeyPanelOverlay {
+    align-items: flex-end;
+  }
+
+  .journeyPanel {
+    width: 100%;
+    max-width: none;
+    height: min(88vh, 760px);
+    border-radius: 14px 14px 0 0;
   }
 }
 

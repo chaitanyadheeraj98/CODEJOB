@@ -83,12 +83,12 @@ describe('toJourney', () => {
     expect(nodes.at(-1)?.id).toBe('status:client_reviewing')
   })
 
-  it('keeps both status events and marks a triggered backwards move corrected', () => {
+  it('keeps both status events and marks a backwards move corrected when the server omits the trigger', () => {
     const nodes = toJourney(application({
       status: 'contacted',
       events: [
         { id: 1, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"contacted","to":"resume_shared"}', occurred_at: '2026-01-02T00:00:00Z' },
-        { id: 2, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"resume_shared","to":"contacted","trigger":"user_correction"}', occurred_at: '2026-01-03T00:00:00Z' },
+        { id: 2, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"resume_shared","to":"contacted"}', occurred_at: '2026-01-03T00:00:00Z' },
       ],
     }))
     const statuses = nodes.filter((node) => node.kind === 'status')

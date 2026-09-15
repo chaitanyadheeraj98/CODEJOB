@@ -148,6 +148,17 @@ describe('JourneyPanel actions', () => {
     expect(container.textContent).toContain('write failed')
   })
 
+  it('traps keyboard focus and closes on Escape', async () => {
+    const { container, props } = render(actions('add_note'))
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')
+    const buttons = Array.from(dialog?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') ?? [])
+    buttons.at(-1)?.focus()
+    act(() => dialog?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })))
+    expect(document.activeElement).toBe(buttons[0])
+    act(() => dialog?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(props.onClose).toHaveBeenCalledOnce()
+  })
+
   it('shows duplicate conflicts and succeeds through the explicit override path', async () => {
     const duplicate = { id: 99, job_title_snapshot: 'Java Engineer', end_client_snapshot: 'Acme', status: 'submitted_to_client', created_at: '2026-01-01T00:00:00Z' } as const
     vi.mocked(api.submitApplicationToClient)
