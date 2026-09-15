@@ -517,7 +517,14 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
                     <section className="applicationTimeline" aria-label={`Timeline for ${currentTitle}`}>
                       {!detail ? <p className="subtle">Loading timeline...</p> : (
                         <>
-                          <JourneyColumn application={detail} />
+                          <JourneyColumn
+                            application={detail}
+                            apiBase={apiBase}
+                            duplicateConflicts={conflicts}
+                            onUpdated={replaceRow}
+                            onDuplicateConflicts={(next) => setDuplicateConflicts((current) => ({ ...current, [item.id]: next }))}
+                            onError={setError}
+                          />
                           <section className="detailSection applicationWorkflowPanel">
                             <h4>Client submission</h4>
                             {item.status === 'submitted_to_client' ? <p className="subtle">Submitted {dateTimeLabel(item.submitted_to_client_at)}</p> : (

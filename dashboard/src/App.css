@@ -4637,6 +4637,27 @@ button.emailSearchResult:focus-visible {
   opacity: .7;
 }
 
+.applicationJourneyNode--corrected .applicationJourneyNodeButton {
+  text-decoration: line-through;
+  opacity: .7;
+}
+
+.applicationJourneyNodeButton {
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.applicationJourneyNodeButton:hover,
+.applicationJourneyNodeButton:focus-visible {
+  color: #355aa7;
+}
+
 .applicationJourneyNode time,
 .applicationJourneyNode small {
   display: block;
