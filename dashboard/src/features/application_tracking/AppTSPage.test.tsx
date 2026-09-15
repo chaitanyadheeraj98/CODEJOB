@@ -342,4 +342,33 @@ describe('AppTSPage filter/sort wiring', () => {
 
     expect(container.querySelector('.candidateCardRecordId')?.textContent).toBe('Record ID: -')
   })
+
+  it('cuts the expanded row over to the journey without the superseded mutation forms', async () => {
+    const summary = makeApplication({ status: 'rtr_confirmed' })
+    const detail = makeApplication({ status: 'rtr_confirmed' })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/appts/applications/501')) return jsonResponse(detail)
+      if (url.includes('/appts/applications')) return jsonResponse({ items: [summary], total: 1, next_cursor: null, has_next: false })
+      return jsonResponse({ detail: 'not found' }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root: Root = createRoot(container)
+    cleanups.push(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals() })
+    await act(async () => { root.render(<AppTSPage apiBase="http://localhost:8000" refreshToken={0} activeTab="tracked" />) })
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 250)) })
+    const open = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'View timeline')
+    await act(async () => { open?.click(); await Promise.resolve(); await Promise.resolve() })
+
+    expect(container.querySelector('[aria-label="Application journey"]')).not.toBeNull()
+    expect(container.textContent).not.toContain('Client submission')
+    expect(container.textContent).not.toContain('Interview rounds')
+    expect(container.textContent).not.toContain('Activity timeline')
+    const add = container.querySelector<HTMLButtonElement>('[aria-label="Add journey action"]')
+    await act(async () => { add?.click() })
+    expect(Array.from(container.querySelectorAll('[role="menuitem"]')).map((item) => item.textContent)).toEqual(['Submit to Client', 'Add Note', 'Add Call Note', 'Link Email', 'Close'])
+  })
 })

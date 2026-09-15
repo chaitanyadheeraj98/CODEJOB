@@ -6,13 +6,10 @@ import { formatAtsScore, getAtsStrengthLabel, renderContactDetailsGrid } from '.
 import { filterSortRegistry, resolveRegistryEntry } from '../../filterSortRegistry'
 import { CategoryChip, StatusBadge } from '../premium_numbers/StatusBadge'
 import VerificationBadge from '../premium_numbers/VerificationBadge'
+import JourneyColumn from './JourneyColumn'
 import {
-  ApplicationDuplicateConflictError,
   RoleManifestForkRequiredError,
-  addApplicationInterview,
   approveSendCandidate,
-  createApplicationEvent,
-  deleteApplicationInterview,
   fetchApplicationSentDetails,
   fetchCandidateSentDetails,
   getApplication,
@@ -20,16 +17,12 @@ import {
   listBookmarkedRequirements,
   regenerateCandidateDraft,
   rejectCandidate,
-  requestApplicationRtr,
   retryRoleDetectionForCandidate,
   sendCandidateToFailedMapping,
-  submitApplicationToClient,
   toggleCandidateTracking,
   updateApplication,
-  updateApplicationInterview,
-  updateApplicationRtr,
 } from './api'
-import type { ApplicationCard, ApplicationDuplicateSummary, ApplicationInterview, ApplicationStatus } from '../premium_numbers/types'
+import type { ApplicationCard, ApplicationDuplicateSummary, ApplicationStatus } from '../premium_numbers/types'
 
 const PAGE_SIZE = 10
 const STATUSES: ApplicationStatus[] = [
@@ -40,8 +33,6 @@ const STATUSES: ApplicationStatus[] = [
 const EDITABLE_STATUSES = STATUSES.filter((value) => value !== 'submitted_to_client')
 const CLOSED_STATUSES: ApplicationStatus[] = ['hired', 'rejected', 'withdrawn', 'no_response', 'position_closed', 'duplicate']
 const CLOSED_REASON_CODES = ['rate_mismatch', 'skills_gap', 'client_freeze', 'position_filled', 'candidate_declined', 'recruiter_unresponsive', 'other'] as const
-const INTERVIEW_ROUND_TYPES: ApplicationInterview['round_type'][] = ['recruiter_screen', 'interview_1', 'interview_2', 'final_interview', 'other']
-const INTERVIEW_RESULTS: ApplicationInterview['result'][] = ['scheduled', 'completed', 'passed', 'failed', 'cancelled', 'rescheduled']
 
 function label(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
@@ -57,10 +48,6 @@ function localDateTimeValue(value: string | null): string {
 }
 
 type ApplicationEdit = { next_action_type: string; next_action_at: string; closed_reason: string; closed_reason_code: string }
-type EventDraft = { event_type: 'note' | 'email_linked' | 'call_note'; note: string; linked_recruiter_email_id: string }
-type RtrDraft = { role_scope: string; end_client_scope: string; expires_at: string }
-type RtrProofDraft = { proof_attachment_id: string; proof_recruiter_email_id: string }
-type InterviewDraft = { round_type: ApplicationInterview['round_type']; scheduled_at: string; format: string; interviewer_names: string; sync_application_status: boolean }
 
 type Props = { apiBase: string; refreshToken: number; activeTab?: 'bookmarked' | 'tracked'; onTabChange?: (tab: 'bookmarked' | 'tracked') => void; filterValues?: FilterValues; sortValue?: string }
 
@@ -89,11 +76,6 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [details, setDetails] = useState<Record<number, ApplicationCard>>({})
   const [edits, setEdits] = useState<Record<number, Partial<ApplicationEdit>>>({})
-  const [eventDrafts, setEventDrafts] = useState<Record<number, EventDraft>>({})
-  const [rtrDrafts, setRtrDrafts] = useState<Record<number, RtrDraft>>({})
-  const [rtrProofDrafts, setRtrProofDrafts] = useState<Record<number, RtrProofDraft>>({})
-  const [interviewDrafts, setInterviewDrafts] = useState<Record<number, InterviewDraft>>({})
-  const [interviewEdits, setInterviewEdits] = useState<Record<number, Partial<ApplicationInterview>>>({})
   const [duplicateConflicts, setDuplicateConflicts] = useState<Record<number, ApplicationDuplicateSummary[]>>({})
   const [trackedSentDetailsExpanded, setTrackedSentDetailsExpanded] = useState<Record<number, boolean>>({})
   const [trackedSentDetailsLoading, setTrackedSentDetailsLoading] = useState<Record<number, boolean>>({})
@@ -179,71 +161,6 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
       setDetails((current) => ({ ...current, [id]: detail }))
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const addEvent = async (id: number) => {
-    const draft = eventDrafts[id] ?? { event_type: 'note' as const, note: '', linked_recruiter_email_id: '' }
-    setBusyId(id)
-    setError('')
-    try {
-      await createApplicationEvent(apiBase, id, { event_type: draft.event_type, note: draft.note, ...(draft.event_type === 'email_linked' ? { linked_recruiter_email_id: Number(draft.linked_recruiter_email_id) } : {}) })
-      const detail = await getApplication(apiBase, id)
-      setDetails((current) => ({ ...current, [id]: detail }))
-      setEventDrafts((current) => ({ ...current, [id]: { event_type: 'note', note: '', linked_recruiter_email_id: '' } }))
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const requestRtr = async (item: ApplicationCard) => {
-    const draft = rtrDrafts[item.id] ?? { role_scope: item.current_job_title || item.job_title_snapshot, end_client_scope: item.current_end_client || item.end_client_snapshot, expires_at: '' }
-    const updated = await saveDetailMutation(item.id, () => requestApplicationRtr(apiBase, item.id, { role_scope: draft.role_scope, end_client_scope: draft.end_client_scope, expires_at: draft.expires_at ? new Date(draft.expires_at).toISOString() : null }))
-    if (updated) setRtrDrafts((current) => { const next = { ...current }; delete next[item.id]; return next })
-  }
-
-  const confirmRtr = async (applicationId: number, rtrId: number) => {
-    const proof = rtrProofDrafts[applicationId] ?? { proof_attachment_id: '', proof_recruiter_email_id: '' }
-    const updated = await saveDetailMutation(applicationId, () => updateApplicationRtr(apiBase, applicationId, rtrId, { status: 'confirmed', ...(proof.proof_attachment_id ? { proof_attachment_id: Number(proof.proof_attachment_id) } : {}), ...(proof.proof_recruiter_email_id ? { proof_recruiter_email_id: Number(proof.proof_recruiter_email_id) } : {}) }))
-    if (updated) setRtrProofDrafts((current) => { const next = { ...current }; delete next[applicationId]; return next })
-  }
-
-  const setRtrStatus = (applicationId: number, rtrId: number, nextStatus: 'expired' | 'revoked') => {
-    saveDetailMutation(applicationId, () => updateApplicationRtr(apiBase, applicationId, rtrId, { status: nextStatus })).catch(() => undefined)
-  }
-
-  const addInterview = async (applicationId: number) => {
-    const draft = interviewDrafts[applicationId] ?? { round_type: 'interview_1' as const, scheduled_at: '', format: '', interviewer_names: '', sync_application_status: true }
-    const updated = await saveDetailMutation(applicationId, () => addApplicationInterview(apiBase, applicationId, { round_type: draft.round_type, scheduled_at: draft.scheduled_at ? new Date(draft.scheduled_at).toISOString() : null, format: draft.format, interviewer_names: draft.interviewer_names, sync_application_status: draft.sync_application_status }))
-    if (updated) setInterviewDrafts((current) => { const next = { ...current }; delete next[applicationId]; return next })
-  }
-
-  const saveInterview = async (applicationId: number, interview: ApplicationInterview) => {
-    const edit = interviewEdits[interview.id] ?? {}
-    const updated = await saveDetailMutation(applicationId, () => updateApplicationInterview(apiBase, applicationId, interview.id, edit))
-    if (updated) setInterviewEdits((current) => { const next = { ...current }; delete next[interview.id]; return next })
-  }
-
-  const removeInterview = (applicationId: number, interviewId: number) => {
-    if (!window.confirm('Delete this interview round?')) return
-    saveDetailMutation(applicationId, () => deleteApplicationInterview(apiBase, applicationId, interviewId)).catch(() => undefined)
-  }
-
-  const submitToClient = async (applicationId: number, override = false) => {
-    setBusyId(applicationId)
-    setError('')
-    try {
-      const updated = await submitApplicationToClient(apiBase, applicationId, override)
-      replaceRow(updated)
-      setDetails((current) => ({ ...current, [applicationId]: updated }))
-      setDuplicateConflicts((current) => { const next = { ...current }; delete next[applicationId]; return next })
-    } catch (reason) {
-      if (reason instanceof ApplicationDuplicateConflictError) setDuplicateConflicts((current) => ({ ...current, [applicationId]: reason.duplicates }))
-      else setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setBusyId(null)
     }
@@ -425,12 +342,6 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
           <div className="opportunityGrid">
             {rows.map((item) => {
               const detail = details[item.id]
-              const draft = eventDrafts[item.id] ?? { event_type: 'note' as const, note: '', linked_recruiter_email_id: '' }
-              const rtrDraft = rtrDrafts[item.id] ?? { role_scope: item.current_job_title || item.job_title_snapshot, end_client_scope: item.current_end_client || item.end_client_snapshot, expires_at: '' }
-              const rtrProofDraft = rtrProofDrafts[item.id] ?? { proof_attachment_id: '', proof_recruiter_email_id: '' }
-              const interviewDraft = interviewDrafts[item.id] ?? { round_type: 'interview_1' as const, scheduled_at: '', format: '', interviewer_names: '', sync_application_status: true }
-              const currentRtr = detail?.rtr_history[0]
-              const hasUnexpiredRtr = Boolean(currentRtr && !['expired', 'revoked'].includes(currentRtr.status) && (!currentRtr.expires_at || new Date(currentRtr.expires_at) > new Date()))
               const conflicts = duplicateConflicts[item.id] ?? []
               const currentTitle = item.current_job_title || item.job_title_snapshot
               const currentCompany = item.current_recruiter_company || item.recruiter_company_snapshot
@@ -516,109 +427,14 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
                     <section className="applicationTimeline" aria-label={`Timeline for ${currentTitle}`}>
                       {!detail ? <p className="subtle">Loading timeline...</p> : (
                         <>
-                          <section className="detailSection applicationWorkflowPanel">
-                            <h4>Client submission</h4>
-                            {item.status === 'submitted_to_client' ? <p className="subtle">Submitted {dateTimeLabel(item.submitted_to_client_at)}</p> : (
-                              <button type="button" onClick={() => submitToClient(item.id)} disabled={busyId === item.id}>Profile Submitted to Client</button>
-                            )}
-                            {conflicts.length > 0 ? (
-                              <div className="duplicateConflict" role="alert">
-                                <p><strong>Possible duplicate submission</strong></p>
-                                <ul>{conflicts.map((conflict) => <li key={conflict.id}>#{conflict.id} · {conflict.job_title_snapshot || '--'} · {conflict.end_client_snapshot || '--'} · {label(conflict.status)}</li>)}</ul>
-                                <button type="button" onClick={() => submitToClient(item.id, true)} disabled={busyId === item.id}>Submit anyway</button>
-                              </div>
-                            ) : null}
-                          </section>
-
-                          <section className="detailSection applicationWorkflowPanel">
-                            <h4>RTR</h4>
-                            {currentRtr ? (
-                              <p><strong>{label(currentRtr.status)}</strong>{' · '}{currentRtr.role_scope || item.job_title_snapshot || '--'}{' · '}{currentRtr.end_client_scope || item.end_client_snapshot || '--'}{currentRtr.expires_at ? ` · Expires ${dateTimeLabel(currentRtr.expires_at)}` : ''}</p>
-                            ) : <p className="subtle">No RTR history yet.</p>}
-                            {!hasUnexpiredRtr ? (
-                              <div className="detailFormGrid">
-                                <label>Role scope<input value={rtrDraft.role_scope} onChange={(event) => setRtrDrafts((current) => ({ ...current, [item.id]: { ...rtrDraft, role_scope: event.target.value } }))} /></label>
-                                <label>End client scope<input value={rtrDraft.end_client_scope} onChange={(event) => setRtrDrafts((current) => ({ ...current, [item.id]: { ...rtrDraft, end_client_scope: event.target.value } }))} /></label>
-                                <label>Expiry<input type="datetime-local" value={rtrDraft.expires_at} onChange={(event) => setRtrDrafts((current) => ({ ...current, [item.id]: { ...rtrDraft, expires_at: event.target.value } }))} /></label>
-                                <button type="button" onClick={() => requestRtr(item)} disabled={busyId === item.id}>Request RTR</button>
-                              </div>
-                            ) : null}
-                            {currentRtr?.status === 'requested' && hasUnexpiredRtr ? (
-                              <div className="detailFormGrid">
-                                <label>Recruiter email ID proof<input type="number" min={1} value={rtrProofDraft.proof_recruiter_email_id} onChange={(event) => setRtrProofDrafts((current) => ({ ...current, [item.id]: { ...rtrProofDraft, proof_recruiter_email_id: event.target.value } }))} /></label>
-                                <div className="rowBtns">
-                                  <button type="button" onClick={() => confirmRtr(item.id, currentRtr.id)} disabled={busyId === item.id || (!rtrProofDraft.proof_attachment_id && !rtrProofDraft.proof_recruiter_email_id)}>Confirm RTR</button>
-                                  <button type="button" onClick={() => setRtrStatus(item.id, currentRtr.id, 'expired')} disabled={busyId === item.id}>Mark expired</button>
-                                  <button type="button" onClick={() => setRtrStatus(item.id, currentRtr.id, 'revoked')} disabled={busyId === item.id}>Revoke</button>
-                                </div>
-                              </div>
-                            ) : null}
-                            {currentRtr?.status === 'confirmed' && hasUnexpiredRtr ? (
-                              <button type="button" onClick={() => setRtrStatus(item.id, currentRtr.id, 'revoked')} disabled={busyId === item.id}>Revoke RTR</button>
-                            ) : null}
-                          </section>
-
-                          <section className="detailSection applicationWorkflowPanel">
-                            <h4>Interview rounds</h4>
-                            {detail.interviews.length === 0 ? <p className="subtle">No interview rounds yet.</p> : (
-                              <div className="applicationInterviewList">
-                                {detail.interviews.map((interview) => {
-                                  const edit = interviewEdits[interview.id] ?? {}
-                                  return (
-                                    <div key={interview.id} className="applicationInterviewRow">
-                                      <p><strong>{label(interview.round_type)}</strong> · {dateTimeLabel(interview.scheduled_at)}</p>
-                                      <div className="detailFormGrid">
-                                        <label>Result
-                                          <select value={edit.result ?? interview.result} onChange={(event) => setInterviewEdits((current) => ({ ...current, [interview.id]: { ...edit, result: event.target.value as ApplicationInterview['result'] } }))}>
-                                            {INTERVIEW_RESULTS.map((value) => <option key={value} value={value}>{label(value)}</option>)}
-                                          </select>
-                                        </label>
-                                        <label>Feedback<textarea rows={2} value={edit.feedback ?? interview.feedback} onChange={(event) => setInterviewEdits((current) => ({ ...current, [interview.id]: { ...edit, feedback: event.target.value } }))} /></label>
-                                      </div>
-                                      <div className="rowBtns">
-                                        <button type="button" onClick={() => saveInterview(item.id, interview)} disabled={busyId === item.id || !interviewEdits[interview.id]}>Save interview</button>
-                                        <button type="button" className="dangerButton" onClick={() => removeInterview(item.id, interview.id)} disabled={busyId === item.id}>Delete interview</button>
-                                      </div>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            )}
-                            <div className="detailFormGrid applicationInterviewForm">
-                              <label>Round
-                                <select value={interviewDraft.round_type} onChange={(event) => setInterviewDrafts((current) => ({ ...current, [item.id]: { ...interviewDraft, round_type: event.target.value as ApplicationInterview['round_type'] } }))}>
-                                  {INTERVIEW_ROUND_TYPES.map((value) => <option key={value} value={value}>{label(value)}</option>)}
-                                </select>
-                              </label>
-                              <label>Scheduled at<input type="datetime-local" value={interviewDraft.scheduled_at} onChange={(event) => setInterviewDrafts((current) => ({ ...current, [item.id]: { ...interviewDraft, scheduled_at: event.target.value } }))} /></label>
-                              <label>Format<input value={interviewDraft.format} onChange={(event) => setInterviewDrafts((current) => ({ ...current, [item.id]: { ...interviewDraft, format: event.target.value } }))} /></label>
-                              <label>Interviewers<input value={interviewDraft.interviewer_names} onChange={(event) => setInterviewDrafts((current) => ({ ...current, [item.id]: { ...interviewDraft, interviewer_names: event.target.value } }))} /></label>
-                              <label className="checkboxLabel">
-                                <input type="checkbox" checked={interviewDraft.sync_application_status} onChange={(event) => setInterviewDrafts((current) => ({ ...current, [item.id]: { ...interviewDraft, sync_application_status: event.target.checked } }))} />
-                                Move application to this round (uncheck for historical rounds)
-                              </label>
-                              <button type="button" onClick={() => addInterview(item.id)} disabled={busyId === item.id}>Add interview</button>
-                            </div>
-                          </section>
-
-                          <h4>Activity timeline</h4>
-                          {detail.events.length === 0 ? <p className="subtle">No timeline events yet.</p> : (
-                            <ol>{detail.events.map((event) => <li key={event.id}><strong>{label(event.event_type)}</strong><time>{dateTimeLabel(event.occurred_at)}</time>{event.note ? <p>{event.note}</p> : null}{event.linked_recruiter_email_id ? <small>Email ID {event.linked_recruiter_email_id}</small> : null}</li>)}</ol>
-                          )}
-                          <div className="applicationEventForm">
-                            <label>Activity type
-                              <select value={draft.event_type} onChange={(event) => setEventDrafts((current) => ({ ...current, [item.id]: { ...draft, event_type: event.target.value as EventDraft['event_type'] } }))}>
-                                <option value="note">Note</option>
-                                <option value="call_note">Call note</option>
-                                <option value="email_linked">Link recruiter email</option>
-                              </select>
-                            </label>
-                            {draft.event_type === 'email_linked' ? (
-                              <label>Recruiter email ID<input type="number" min={1} value={draft.linked_recruiter_email_id} onChange={(event) => setEventDrafts((current) => ({ ...current, [item.id]: { ...draft, linked_recruiter_email_id: event.target.value } }))} /></label>
-                            ) : null}
-                            <label>Note<textarea rows={3} value={draft.note} onChange={(event) => setEventDrafts((current) => ({ ...current, [item.id]: { ...draft, note: event.target.value } }))} /></label>
-                            <button type="button" onClick={() => addEvent(item.id)} disabled={busyId === item.id || (draft.event_type === 'email_linked' && !draft.linked_recruiter_email_id)}>Add to timeline</button>
-                          </div>
+                          <JourneyColumn
+                            application={detail}
+                            apiBase={apiBase}
+                            duplicateConflicts={conflicts}
+                            onUpdated={replaceRow}
+                            onDuplicateConflicts={(next) => setDuplicateConflicts((current) => ({ ...current, [item.id]: next }))}
+                            onError={setError}
+                          />
                         </>
                       )}
                     </section>

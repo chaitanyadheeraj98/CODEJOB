@@ -4536,8 +4536,7 @@ button.emailSearchResult:focus-visible {
   background: var(--surface-soft);
 }
 
-.resumeLockPicker > label,
-.applicationEventForm label {
+.resumeLockPicker > label {
   display: grid;
   gap: 5px;
   color: var(--muted);
@@ -4549,39 +4548,135 @@ button.emailSearchResult:focus-visible {
   margin: 0;
 }
 
-.applicationTimeline ol {
+.applicationJourney {
   display: grid;
   gap: 12px;
+}
+
+.applicationJourney > h4 {
+  margin: 0;
+}
+
+.applicationJourneyList {
+  display: grid;
+  gap: 0;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.applicationTimeline li {
+.applicationJourneyNode {
+  position: relative;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 0 14px;
+  border: 0;
+}
+
+.applicationJourneyNode:not(:last-child)::after {
+  position: absolute;
+  top: 24px;
+  bottom: 0;
+  left: 11px;
+  width: 2px;
+  background: var(--line);
+  content: '';
+}
+
+.applicationJourneyNode--branch {
+  margin-left: 36px;
+}
+
+.applicationJourneyMarker {
+  z-index: 1;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 2px solid #4f73c8;
+  border-radius: 50%;
+  background: var(--surface);
+  color: #355aa7;
+  font-weight: 800;
+}
+
+.applicationJourneyNode--waiting .applicationJourneyMarker {
+  border-color: #b77b16;
+  color: #8a5a0c;
+}
+
+.applicationJourneyNode--failed .applicationJourneyMarker {
+  border-color: #c44848;
+  color: #a62f2f;
+}
+
+.applicationJourneyNode--corrected .applicationJourneyNodeButton {
+  text-decoration: line-through;
+  opacity: .7;
+}
+
+.applicationJourneyNodeButton {
   display: grid;
   gap: 3px;
-  padding-left: 12px;
-  border-left: 3px solid #c4d4f7;
+  justify-items: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 
-.applicationTimeline li p {
-  margin: 2px 0 0;
-  white-space: pre-wrap;
+.applicationJourneyNodeButton:hover,
+.applicationJourneyNodeButton:focus-visible {
+  color: #355aa7;
 }
 
-.applicationEventForm {
-  display: grid;
-  gap: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+.applicationJourneyNode time,
+.applicationJourneyNode small {
+  display: block;
 }
 
-.applicationEventForm button {
-  width: fit-content;
+.applicationJourneyTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
 }
 
-.applicationWorkflowPanel {
-  padding: 0 0 14px;
+.applicationJourneyTags > span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f8dddd;
+  color: #8f2929;
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.applicationJourneyAdd {
+  position: relative;
+  padding-left: 1px;
+}
+
+.applicationJourneyAddButton {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.applicationJourneyActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.journeyPanel {
+  max-width: 540px;
 }
 
 .applicationDraftPanel textarea {
@@ -4614,15 +4709,12 @@ button.emailSearchResult:focus-visible {
   gap: 8px;
 }
 
-.applicationInterviewList,
-.applicationInterviewRow,
 .duplicateConflict,
 .opportunityJobDetails > .detailFormGrid {
   display: grid;
   gap: 10px;
 }
 
-.applicationInterviewRow,
 .duplicateConflict {
   padding: 12px;
   border: 1px solid var(--line);
@@ -4630,7 +4722,6 @@ button.emailSearchResult:focus-visible {
   background: var(--surface);
 }
 
-.applicationInterviewRow > p,
 .duplicateConflict > p,
 .duplicateConflict > ul {
   margin: 0;
@@ -4686,6 +4777,17 @@ button.emailSearchResult:focus-visible {
 @media (max-width: 640px) {
   .mergePreviewGrid {
     grid-template-columns: 1fr;
+  }
+
+  .journeyPanelOverlay {
+    align-items: flex-end;
+  }
+
+  .journeyPanel {
+    width: 100%;
+    max-width: none;
+    height: min(88vh, 760px);
+    border-radius: 14px 14px 0 0;
   }
 }
 
