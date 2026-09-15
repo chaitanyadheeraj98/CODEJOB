@@ -219,17 +219,90 @@ def test_prompt_version_excludes_dynamic_content_but_tracks_guidance():
         assert prompt_sha256() != initial
 
 
+def test_tool_selection_fixture_only_expects_tools_that_exist():
+    """A typo in `expected` is a case that can never pass, and nothing else reads
+    this file - the measurement script needs a live model, so it is not run in CI."""
+    import json
+    from pathlib import Path
+
+    from app.mcp_server.server import (
+        BASE_TOOLS,
+        CHAT_ACTION_TOOLS,
+        LABEL_TRACKING_ACTION_TOOLS,
+        LABEL_TRACKING_TOOLS,
+        RELATIONSHIP_TOOLS,
+        SCHEDULING_TOOLS,
+    )
+    from app.mcp_server.tools.support import propose_create_github_issue
+    from app.mcp_server.tools.web_search import search_web
+
+    registered = {
+        function.__name__
+        for function in (
+            *BASE_TOOLS,
+            *CHAT_ACTION_TOOLS,
+            *LABEL_TRACKING_TOOLS,
+            *LABEL_TRACKING_ACTION_TOOLS,
+            *RELATIONSHIP_TOOLS,
+            *SCHEDULING_TOOLS,
+            propose_create_github_issue,
+            search_web,
+        )
+    }
+    fixture = Path(__file__).parent / "fixtures/chat_tool_selection.json"
+    cases = json.loads(fixture.read_text(encoding="utf-8"))
+    expected = {name for case in cases for name in case["expected"]}
+    assert expected <= registered, f"fixture expects unregistered tools: {sorted(expected - registered)}"
+    assert len({case["id"] for case in cases}) == len(cases), "duplicate fixture ids"
+
+
+def test_prompt_routes_background_questions_to_runs_and_forbids_claiming_to_be_busy():
+    """Chat is not blocked by the worker - admission control and the job queues
+    are separate pools - so "I'm busy with a background task" is an excuse for a
+    failure that had another cause, every time."""
+    prompt = build_system_prompt()
+    assert "get_recent_runs" in prompt
+    assert "never say you are busy" in prompt
+    assert "processed_items" in prompt and "total_items" in prompt
+
+
+def test_prompt_forbids_silent_truncation_and_the_linked_no_reply_collapse():
+    """Both found by replaying the reported question against the real model.
+
+    It routed correctly and read the right payload, then named 3 of 7 replies as
+    if that were all of them, and described 41 applications that *are* linked to
+    a thread as having no linked thread. The tool was right in both cases; only
+    the sentence was wrong, so the fix is here rather than in the tool.
+    """
+    prompt = build_system_prompt()
+    assert "say how many there were" in prompt
+    assert "you shortened the list" in prompt
+    assert "no reply yet" in prompt and "no linked thread" in prompt
+    # The three states have to stay distinguishable in the wording itself.
+    assert prompt.count("no linked thread") >= 2
+
+
 def test_prompt_separates_tracked_applications_opportunities_and_gates_label_tools():
     prompt = build_system_prompt()
     assert "A tracked application is a row in the Application Tracker" in prompt
     assert "include its\napplication id and its record_id" in prompt
-    assert 'say "no linked thread"' in prompt
+    # Reworded when the replay showed the model collapsing linked-no-reply into
+    # unlinked; the rule is now three named states rather than one sentence.
+    assert '"no linked thread"' in prompt
     assert "not get_recruiter_replies" in prompt
+    assert "`limit=50`" in prompt
     assert "search_opportunities" in prompt
     with patch.object(settings, "feature_label_tracking_enabled", True):
-        assert "call\nlist_gmail_labels" in build_system_prompt()
+        enabled = build_system_prompt()
+        assert "call\nlist_gmail_labels" in enabled
+        # What is inside a label is a different question from what labels exist,
+        # and counting it has exactly one honest source.
+        assert "list_label_threads" in enabled
+        assert "list_label_threads is the\nonly tool that counts it" in enabled
     with patch.object(settings, "feature_label_tracking_enabled", False):
-        assert "call\nlist_gmail_labels" not in build_system_prompt()
+        disabled = build_system_prompt()
+        assert "call\nlist_gmail_labels" not in disabled
+        assert "list_label_threads" not in disabled
 
 
 @pytest.mark.parametrize("failure", ["disconnect", "budget", "raises", "telemetry"])

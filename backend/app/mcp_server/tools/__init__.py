@@ -40,7 +40,7 @@ from app.mcp_server.tools.applications import get_tracked_application, list_trac
 from app.mcp_server.tools.metrics import get_metrics
 from app.mcp_server.tools.inbox import get_conversation, get_recruiter_replies, list_conversations
 from app.mcp_server.tools.manual_intake import check_manual_intake, propose_manual_requirement
-from app.mcp_server.tools.labels import get_label_thread_dossier, list_gmail_labels
+from app.mcp_server.tools.labels import get_label_thread_dossier, list_gmail_labels, list_label_threads
 from app.mcp_server.tools.navigation import navigate_to_queue
 from app.mcp_server.tools.candidate_documents import list_candidate_documents
 from app.mcp_server.tools.chat_attachments import list_chat_attachments, read_chat_attachment
@@ -105,6 +105,7 @@ __all__ = [
     "list_conversations",
     "list_external_opportunities",
     "list_gmail_labels",
+    "list_label_threads",
     "list_recruiter_opportunities",
     "list_resume_drafts",
     "list_resumes",

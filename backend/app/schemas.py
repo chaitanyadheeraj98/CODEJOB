@@ -310,11 +310,8 @@ class SettingsRequest(BaseModel):
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
     feature_ai_enabled: bool = False
-    feature_ai_extractor_enabled: bool = False
-    feature_semantic_enabled: bool = False
-    feature_groq_job_parser_enabled: bool = False
+    ai_job_intelligence: bool = False
     feature_gmail_requirement_groups_enabled: bool = False
-    feature_role_manifest_enabled: bool = False
     feature_strict_candidate_screening_enabled: bool = False
     feature_email_tracking_enabled: bool = False
     feature_reply_inbox_enabled: bool = False

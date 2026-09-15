@@ -117,7 +117,8 @@ class JobMetadataAiExtraction:
     """AI-first job metadata for a posting or email, produced by parse_email_with_details().
 
     Fields left blank mean the AI extractor did not run, failed, or returned no value for that
-    field; callers should fall back to regex extraction (or a prior stored value) in that case.
+    field; callers may use a prior stored value or field-specific deterministic extraction, but
+    must not reinterpret a blank work mode from raw text.
     """
 
     job_title: str = ""
@@ -152,6 +153,25 @@ def job_metadata_ai_extraction_from_parsed(parsed: dict, parser_details: dict) -
         domain=domain,
         end_client=end_client,
         implementation_partner=implementation_partner,
+    )
+
+
+def job_metadata_ai_extraction_from_email(email: RecruiterEmail) -> JobMetadataAiExtraction:
+    try:
+        parser_details = json.loads(email.parser_details_json or "")
+    except (json.JSONDecodeError, TypeError):
+        return JobMetadataAiExtraction()
+    if not isinstance(parser_details, dict):
+        return JobMetadataAiExtraction()
+    return job_metadata_ai_extraction_from_parsed(
+        {
+            "role": email.role,
+            "location": email.location,
+            "domain": email.domain,
+            "end_client": email.end_client,
+            "implementation_partner": email.implementation_partner,
+        },
+        parser_details,
     )
 
 
@@ -369,7 +389,11 @@ class PhoneIntelligenceWorkflowService:
     ) -> PhoneIntelligenceWorkflowResult:
         return self._run(
             db,
-            _context_from_recruiter_email(email, source=source),
+            _context_from_recruiter_email(
+                email,
+                source=source,
+                ai_extraction=job_metadata_ai_extraction_from_email(email),
+            ),
             include_premium_lead_upsert=True,
             include_intelligence=True,
         )
@@ -384,7 +408,11 @@ class PhoneIntelligenceWorkflowService:
     def extract_only(self, db: Session, email: RecruiterEmail, *, source: str) -> int:
         result = self._run(
             db,
-            _context_from_recruiter_email(email, source=source),
+            _context_from_recruiter_email(
+                email,
+                source=source,
+                ai_extraction=job_metadata_ai_extraction_from_email(email),
+            ),
             include_premium_lead_upsert=True,
             include_intelligence=False,
         )
@@ -399,7 +427,11 @@ class PhoneIntelligenceWorkflowService:
     ) -> PhoneIntelligenceWorkflowResult:
         return self._run(
             db,
-            _context_from_recruiter_email(email, source=source),
+            _context_from_recruiter_email(
+                email,
+                source=source,
+                ai_extraction=job_metadata_ai_extraction_from_email(email),
+            ),
             include_premium_lead_upsert=False,
             include_intelligence=True,
         )
@@ -454,8 +486,8 @@ class PhoneIntelligenceWorkflowService:
         context: PhoneWorkflowSourceContext,
     ) -> RecruiterOpportunity:
         """Re-derive job_title/location/work_mode/visa/domain/end_client/implementation_partner
-        for an *already-created* opportunity (AI-first, regex fallback - same contract as a fresh
-        capture) and apply them onto the existing row. `capture_premium_numbers*` only writes
+        for an *already-created* opportunity (AI-first, field-specific regex fallback except for
+        work mode - same contract as a fresh capture) and apply them onto the existing row. `capture_premium_numbers*` only writes
         these fields once, at first creation (see `_run`'s idempotency check), so an already-
         bridged card never gets new AI-derived values without going through this path. A freshly
         computed blank never overwrites an existing non-blank value, so a manual edit or an
@@ -1457,12 +1489,6 @@ class PhoneIntelligenceWorkflowService:
     @staticmethod
     def _extract_job_metadata(subject: str, body: str) -> tuple[str, str, str, str]:
         content = f"{subject}\n{body}"
-        content_l = content.lower()
-        work_mode = (
-            "Remote"
-            if "remote" in content_l
-            else ("Hybrid" if "hybrid" in content_l else ("Onsite" if "onsite" in content_l else ""))
-        )
         visa_restrictions = ", ".join(extract_work_authorizations(content))
         role_match = re.search(
             r"(?:role|position|title)\s*[:\-]\s*([^\n,;]+)",
@@ -1477,7 +1503,7 @@ class PhoneIntelligenceWorkflowService:
         return (
             role_match.group(1).strip() if role_match else subject.strip(),
             location_match.group(1).strip() if location_match else "",
-            work_mode,
+            "",
             visa_restrictions,
         )
 

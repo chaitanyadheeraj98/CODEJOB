@@ -93,7 +93,14 @@ def test_global_search_finds_rootless_messages_and_rfc_ids(factory):
 def test_label_tracking_tools_are_gated_behind_the_feature_flag():
     from app.mcp_server import server
 
-    assert len(server.LABEL_TRACKING_TOOLS) == 3
+    # Named rather than counted: a bare count tells whoever breaks it that the
+    # number moved, not which tool escaped the gate.
+    assert {tool.__name__ for tool in server.LABEL_TRACKING_TOOLS} == {
+        "resolve_record_by_message_id",
+        "list_gmail_labels",
+        "list_label_threads",
+        "get_label_thread_dossier",
+    }
     assert len(server.LABEL_TRACKING_ACTION_TOOLS) == 1
     # Deliberately not asserting the flag's current value. It is env-backed, so
     # anyone who turns the feature on locally - which is the supported way to

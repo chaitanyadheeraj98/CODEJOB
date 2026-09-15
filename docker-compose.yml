@@ -56,6 +56,7 @@ services:
       # C4: the worker is where embeddings run, so it is never guarded
       # against the transformers/torch import. See app/torch_guard.py.
       PROCESS_ROLE: worker
+      HF_HOME: /root/.cache/huggingface
     # Every name in QUEUE_NAMES must stay on a worker list. A queue nothing consumes
     # accepts jobs silently and runs none of them - no error, no log, jobs sit
     # queued forever. No unit test can see it, because a fake queue always
@@ -64,6 +65,7 @@ services:
     command: rq worker gmail_sync nvoids_sync automation_run embedding_generation scheduled_task manual_intake --url redis://redis:6379/0 --with-scheduler
     volumes:
       - backend_data:/app/data
+      - hf_cache:/root/.cache/huggingface
     depends_on:
       backend:
         condition: service_started
@@ -82,9 +84,11 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       PROCESS_ROLE: worker
+      HF_HOME: /root/.cache/huggingface
     command: rq worker gmail_event --url redis://redis:6379/0
     volumes:
       - backend_data:/app/data
+      - hf_cache:/root/.cache/huggingface
     depends_on:
       backend:
         condition: service_started
@@ -103,9 +107,11 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       PROCESS_ROLE: worker
+      HF_HOME: /root/.cache/huggingface
     command: rq worker telegram_chat --url redis://redis:6379/0
     volumes:
       - backend_data:/app/data
+      - hf_cache:/root/.cache/huggingface
     depends_on:
       backend:
         condition: service_started
@@ -193,5 +199,6 @@ services:
 
 volumes:
   backend_data:
+  hf_cache:
   redis_data:
   postgres_data:

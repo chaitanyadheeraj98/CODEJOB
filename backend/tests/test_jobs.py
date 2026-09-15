@@ -15,6 +15,7 @@ from rq.job import JobStatus
 from app import main
 from app.db import Base
 from app.jobs.progress import update_job_progress
+from app.jobs import tasks
 from app.jobs.queues import get_queue
 from app.models import RecentRun, UserSettings
 from app.recent_runs import create_recent_run
@@ -241,6 +242,93 @@ class BackgroundJobTests(unittest.TestCase):
         self.assertEqual(second.total_items, 4)
         self.assertEqual(second.progress_pct, 100.0)
         self.assertEqual(job.meta["processed_items"], 2)
+
+    def test_automation_job_records_the_run_size_it_found_not_a_placeholder(self) -> None:
+        """`run_automation_job` used to hard-code `total_items=1`, so a run over
+        twelve emails read "0 of 1" in the Background tasks panel for its whole
+        life and the bar never moved. The count now comes from the run itself."""
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db,
+                owner_id=main.settings.owner_id,
+                run_source="automation_run",
+                run_key="automation_run:sized",
+                status="queued",
+                detail="queued",
+            )
+            db.commit()
+
+        def fake_run(request, db, *, run_key_override=None, progress_callback=None, **kwargs):
+            progress_callback(0, 3)
+            for processed in (1, 2, 3):
+                progress_callback(processed, 3)
+            return SimpleNamespace(status="ready", detail="Processed 3 unread matching emails.")
+
+        with patch.object(main, "_run_automation", fake_run),                 patch.object(tasks, "SessionLocal", self.SessionLocal),                 patch("app.jobs.progress.get_current_job", return_value=None):
+            tasks.run_automation_job(run_key="automation_run:sized")
+
+        with self.SessionLocal() as db:
+            row = db.query(RecentRun).filter(RecentRun.run_key == "automation_run:sized").one()
+        self.assertEqual(row.total_items, 3)
+        self.assertEqual(row.processed_items, 3)
+        self.assertEqual(row.status, "ready")
+        self.assertEqual(row.progress_pct, 100.0)
+
+    def test_automation_progress_detail_names_the_work_while_it_is_running(self) -> None:
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db,
+                owner_id=main.settings.owner_id,
+                run_source="automation_run",
+                run_key="automation_run:detail",
+                status="queued",
+                detail="queued",
+            )
+            db.commit()
+
+        seen: list[str] = []
+
+        def fake_run(request, db, *, run_key_override=None, progress_callback=None, **kwargs):
+            progress_callback(0, 3)
+            seen.append(self._detail("automation_run:detail"))
+            progress_callback(1, 3)
+            seen.append(self._detail("automation_run:detail"))
+            return SimpleNamespace(status="ready", detail="done")
+
+        with patch.object(main, "_run_automation", fake_run),                 patch.object(tasks, "SessionLocal", self.SessionLocal),                 patch("app.jobs.progress.get_current_job", return_value=None):
+            tasks.run_automation_job(run_key="automation_run:detail")
+
+        self.assertEqual(seen[0], "Checking 3 recruiter emails - 0 done.")
+        self.assertEqual(seen[1], "Checking 3 recruiter emails - 1 done.")
+
+    def test_a_one_email_run_says_email_not_emails(self) -> None:
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db,
+                owner_id=main.settings.owner_id,
+                run_source="automation_run",
+                run_key="automation_run:single",
+                status="queued",
+                detail="queued",
+            )
+            db.commit()
+
+        seen: list[str] = []
+
+        def fake_run(request, db, *, run_key_override=None, progress_callback=None, **kwargs):
+            progress_callback(1, 1)
+            seen.append(self._detail("automation_run:single"))
+            return SimpleNamespace(status="ready", detail="done")
+
+        with patch.object(main, "_run_automation", fake_run),                 patch.object(tasks, "SessionLocal", self.SessionLocal),                 patch("app.jobs.progress.get_current_job", return_value=None):
+            tasks.run_automation_job(run_key="automation_run:single")
+
+        # "1 emails" on screen reads as a bug in the product.
+        self.assertEqual(seen, ["Checking 1 recruiter email - 1 done."])
+
+    def _detail(self, run_key: str) -> str:
+        with self.SessionLocal() as db:
+            return db.query(RecentRun).filter(RecentRun.run_key == run_key).one().detail
 
     def test_status_and_cancel_follow_rq_during_post_processing_race(self) -> None:
         with self.SessionLocal() as db:

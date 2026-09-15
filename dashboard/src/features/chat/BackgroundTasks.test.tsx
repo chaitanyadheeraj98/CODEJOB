@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BackgroundTasks } from './BackgroundTasks'
-import { jobLabel, statusLabel, type BackgroundJob } from './backgroundJobs'
+import { jobHeadline, jobLabel, statusLabel, type BackgroundJob } from './backgroundJobs'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -80,7 +80,9 @@ describe('BackgroundTasks', () => {
     const view = await mount()
 
     await click(view.querySelector('.bgTasksTrigger'))
-    expect(view.querySelector('.bgTaskName')?.textContent).toBe('Nvoids search')
+    // The row carries its size, so two runs of the same source are not one
+    // repeated word.
+    expect(view.querySelector('.bgTaskName')?.textContent).toBe('Nvoids search - 10 postings')
     expect(view.querySelector('.bgTaskStatus')?.textContent).toBe('Running')
 
     // Collapsed, a row is a name and a bar. The detail and the stop control are
@@ -140,5 +142,23 @@ describe('background job naming', () => {
 
   it('humanises a status from a backend newer than this dashboard', () => {
     expect(statusLabel('some_new_state')).toBe('Some new state')
+  })
+
+  it('tells two automation runs apart by what each is chewing on', () => {
+    // The reported bug: three rows, all reading "Automation run", and no way to
+    // know which one to stop.
+    const run = { run_source: 'automation_run', run_key: 'automation_run:abc' }
+    expect(jobHeadline(job({ ...run, total_items: 3 }))).toBe('Recruiter email check - 3 emails')
+    expect(jobHeadline(job({ ...run, total_items: 12 }))).toBe('Recruiter email check - 12 emails')
+    expect(jobHeadline(job({ ...run, total_items: 1 }))).toBe('Recruiter email check - 1 email')
+  })
+
+  it('counts each source in its own units and falls back to the bare label', () => {
+    expect(jobHeadline(job({ total_items: 500 }))).toBe('Nvoids search - 500 postings')
+    expect(jobHeadline(job({ run_source: 'manual_intake', run_key: 'manual_intake:x', total_items: 2 })))
+      .toBe('Manual intake - 2 items')
+    // A run that has not worked out its size yet must not invent one.
+    expect(jobHeadline(job({ total_items: null }))).toBe('Nvoids search')
+    expect(jobHeadline(job({ total_items: 0 }))).toBe('Nvoids search')
   })
 })

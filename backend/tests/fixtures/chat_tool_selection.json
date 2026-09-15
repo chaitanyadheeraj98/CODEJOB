@@ -315,6 +315,48 @@
     ]
   },
   {
+    "id": "label_thread_mails",
+    "question": "Check the mails in the RTR Requested label.",
+    "expected": [
+      "list_label_threads"
+    ]
+  },
+  {
+    "id": "label_last_synced_mail",
+    "question": "What's the last mail synced in my RTR Requested label?",
+    "expected": [
+      "list_label_threads"
+    ]
+  },
+  {
+    "id": "label_thread_count",
+    "question": "How many threads are under my Submissions label?",
+    "expected": [
+      "list_label_threads"
+    ]
+  },
+  {
+    "id": "label_thread_chronology",
+    "question": "Show me the whole chronology for label thread 1a063c11b18ff256.",
+    "expected": [
+      "get_label_thread_dossier"
+    ]
+  },
+  {
+    "id": "what_is_running",
+    "question": "What's running in the background right now?",
+    "expected": [
+      "get_recent_runs"
+    ]
+  },
+  {
+    "id": "did_sync_finish",
+    "question": "Did the last sync finish or is it still going?",
+    "expected": [
+      "get_recent_runs"
+    ]
+  },
+  {
     "id": "new_recruiter_mail_freshness",
     "question": "Did anything new come in from recruiters?",
     "expected": [

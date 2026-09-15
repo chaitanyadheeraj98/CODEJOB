@@ -478,21 +478,37 @@ def run_automation_job(*, run_key: str, payload: dict[str, Any] | None = None) -
         update_job_progress(
             db,
             run_key=run_key,
-            total_items=1,
             status="running",
-            detail="Automation worker started.",
+            detail="Checking Gmail for new recruiter emails.",
         )
         request = AutomationRunRequest.model_validate(payload) if payload else None
         response = main._run_automation(
             request,
             db,
             run_key_override=run_key,
+            # The run reports its real size as soon as it knows it, then once per
+            # item. The sentence is composed here rather than in the service
+            # because it is read by a person in the Background tasks panel.
+            progress_callback=lambda processed, total: update_job_progress(
+                db,
+                run_key=run_key,
+                processed_items=processed,
+                total_items=total,
+                status="running",
+                detail=(
+                    f"Checking {total} recruiter {'email' if total == 1 else 'emails'}"
+                    f" - {processed} done."
+                    if total
+                    else "No unread recruiter emails matched."
+                ),
+            ),
         )
+        # No counts here: the callback above already recorded the real ones, and
+        # `update_job_progress` keeps the larger of old and new, so passing 1
+        # would only be a lie that loses to the truth.
         row = update_job_progress(
             db,
             run_key=run_key,
-            processed_items=1,
-            total_items=1,
             status=response.status,
             detail=response.detail,
             complete=True,

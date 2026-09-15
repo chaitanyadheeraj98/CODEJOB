@@ -29,6 +29,7 @@ from app.mcp_server.tools import (
     list_conversations,
     list_external_opportunities,
     list_gmail_labels,
+    list_label_threads,
     list_recruiter_opportunities,
     list_scheduled_tasks,
     list_tracked_applications,
@@ -191,6 +192,7 @@ SCHEDULING_TOOLS = (
 LABEL_TRACKING_TOOLS = (
     resolve_record_by_message_id,
     list_gmail_labels,
+    list_label_threads,
     get_label_thread_dossier,
 )
 

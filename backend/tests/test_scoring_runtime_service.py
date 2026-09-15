@@ -1,6 +1,8 @@
 import unittest
 import json
+from unittest.mock import patch
 
+from app.config import settings as app_settings
 from app.services.scoring_runtime_service import ScoringRuntimeDeps, ScoringRuntimeService
 
 
@@ -103,6 +105,7 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(chunks, 1)
         self.assertEqual(calls, [])
 
+    @patch.object(app_settings, "semantic_matching_enabled", True)
     def test_missing_resume_skills_skips_semantic_instead_of_file_extraction(self) -> None:
         def failing_embed(_text: str) -> tuple[list[float], str]:
             raise ValueError("No embedding data received")
@@ -382,6 +385,7 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertIsNotNone(selection.picker_breakdown_json)
         self.assertIsNotNone(selection.candidate_rankings_json)
 
+    @patch.object(app_settings, "semantic_matching_enabled", True)
     def test_select_best_resume_match_reuses_precomputed_email_embedding_across_resumes(self) -> None:
         calls: list[int] = []
 
@@ -435,6 +439,56 @@ class ScoringRuntimeServiceTests(unittest.TestCase):
         self.assertEqual(len(calls), expected_email_chunks + 2)
         self.assertEqual(calls[:expected_email_chunks], [len(chunk) for chunk in email_chunks])
         self.assertTrue(all(count < 900 for count in calls[-2:]))
+
+    def test_deployment_setting_off_ignores_legacy_user_semantic_value(self) -> None:
+        calls: list[str] = []
+
+        def embed(text: str) -> tuple[list[float], str]:
+            calls.append(text)
+            return [0.5, 0.5], "sbert"
+
+        service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=embed))
+        parsed = {
+            "role": "Java Developer",
+            "skills_text": "Java, Spring Boot",
+            "salary_text": "",
+            "location": "Remote",
+        }
+
+        class Settings:
+            role_keywords = ""
+            free_text_guidance = ""
+
+            def __init__(self, legacy_semantic_value: bool):
+                self.feature_semantic_enabled = legacy_semantic_value
+
+        class Resume:
+            semantic_embedding = None
+            skills_text = "Java, Spring Boot"
+            file_path = "resume.docx"
+            file_name = "resume.docx"
+
+        with patch.object(app_settings, "semantic_matching_enabled", False):
+            legacy_off = service.compute_blended_ai_score(
+                subject="Java Developer",
+                body="Need Java and Spring Boot.",
+                parsed=parsed,
+                user_settings=Settings(False),
+                email_row=None,
+                resume=Resume(),
+            )
+            legacy_on = service.compute_blended_ai_score(
+                subject="Java Developer",
+                body="Need Java and Spring Boot.",
+                parsed=parsed,
+                user_settings=Settings(True),
+                email_row=None,
+                resume=Resume(),
+            )
+
+        self.assertEqual(legacy_off[:3], legacy_on[:3])
+        self.assertEqual(legacy_off[2], "v1_rules_plus_ai")
+        self.assertEqual(calls, [])
 
     def test_non_ai_jd_keeps_foundation_bias_stable(self) -> None:
         service = ScoringRuntimeService(ScoringRuntimeDeps(generate_embedding_with_health=lambda _text: ([0.1, 0.2], "hash")))

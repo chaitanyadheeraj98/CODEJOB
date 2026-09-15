@@ -275,6 +275,10 @@ class Settings(BaseSettings):
     feature_auto_poll_interval_minutes: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
+    semantic_matching_enabled: bool = Field(
+        default=False,
+        validation_alias="SEMANTIC_MATCHING_ENABLED",
+    )
     semantic_embedding_provider: str = "sbert"
     semantic_embedding_model: str = "text-embedding-3-small"
     semantic_embedding_dimension: int = 256

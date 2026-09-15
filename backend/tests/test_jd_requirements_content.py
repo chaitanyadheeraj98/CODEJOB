@@ -9,7 +9,12 @@ a matched skill, an experience floor, a location, or a work mode.
 
 import unittest
 
-from app.parsing.jd_requirements import has_job_description_content, requirements_from_payload
+from app.parsing.jd_requirements import (
+    ParsedJDRequirements,
+    has_job_description_content,
+    requirements_from_payload,
+    structured_requirements_from_ai_payload,
+)
 
 EMPTY_PAYLOAD = {
     "schema_version": 1,
@@ -108,6 +113,43 @@ class HasJobDescriptionContentTests(unittest.TestCase):
                 structured_requirements=requirements_from_payload(payload),
             )
         )
+
+
+class StructuredRequirementsFromAiPayloadTests(unittest.TestCase):
+    def test_ai_visa_hints_override_rule_authorizations(self) -> None:
+        result = structured_requirements_from_ai_payload(
+            {"visa_hints": ["USC/GC only"]},
+            fallback=ParsedJDRequirements(allowed_work_authorizations=("H1B",)),
+        )
+
+        self.assertEqual(result.allowed_work_authorizations, ("USC", "GC"))
+
+    def test_empty_ai_visa_hints_keep_rule_authorizations(self) -> None:
+        result = structured_requirements_from_ai_payload(
+            {"visa_hints": []},
+            fallback=ParsedJDRequirements(allowed_work_authorizations=("H1B",)),
+        )
+
+        self.assertEqual(result.allowed_work_authorizations, ("H1B",))
+
+    def test_ai_locations_replace_rule_locations(self) -> None:
+        result = structured_requirements_from_ai_payload(
+            {
+                "primary_location": "Dallas, TX",
+                "mentioned_locations": ["Austin, TX", "Dallas, TX"],
+            },
+            fallback=ParsedJDRequirements(locations=("Rule Parser, ZZ",)),
+        )
+
+        self.assertEqual(result.locations, ("Dallas, TX", "Austin, TX"))
+
+    def test_missing_ai_locations_keep_rule_locations(self) -> None:
+        result = structured_requirements_from_ai_payload(
+            {},
+            fallback=ParsedJDRequirements(locations=("Rule Parser, ZZ",)),
+        )
+
+        self.assertEqual(result.locations, ("Rule Parser, ZZ",))
 
 
 if __name__ == "__main__":

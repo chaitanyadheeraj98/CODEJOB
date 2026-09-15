@@ -7,11 +7,26 @@ from app.db import SessionLocal
 from app.mcp_server.tools import refused, untrusted
 from app.models import UserSettings
 from app.phase0 import DEFAULT_SIGNATURE_EMAIL
-from app.services import gmail_label_service, label_dossier_service
+from app.services import gmail_label_service, label_dossier_service, label_tracking_service
 
 
 def _safe(value: str | None) -> str | None:
     return untrusted("email", value) if value is not None else None
+
+
+def _resolve_label(db, owner_id: str, label: str) -> str | None:
+    """Match one label by id or name, case-insensitively.
+
+    `gmail_label_service.resolve_label_ids` matches exactly, so "rtr requested"
+    misses "RTR Requested" and returns no ids - which the thread query cannot
+    tell apart from a label that genuinely has no threads. The tool resolves the
+    name itself so it can refuse the first case instead of reporting zero.
+    """
+    wanted = label.strip().lower()
+    for row in gmail_label_service.list_labels(db, owner_id):
+        if wanted in (row.external_label_id.lower(), row.name.lower()):
+            return row.external_label_id
+    return None
 
 
 def list_gmail_labels(tracked_only: bool = False) -> dict[str, object]:
@@ -35,12 +50,76 @@ def list_gmail_labels(tracked_only: bool = False) -> dict[str, object]:
                     "name": _safe(row.name),
                     "label_type": row.label_type,
                     "tracked": row.is_tracked,
-                    "message_count_snapshot": row.message_count_snapshot,
+                    # message_count_snapshot is deliberately not reported. Gmail's
+                    # labels.list omits threadsTotal and gmail_client keeps only id
+                    # and name, so the column is 0 for every label forever - and a
+                    # model reading it answered "0 messages synced" for a label
+                    # holding 8 threads. Counts come from list_label_threads.
                     "last_synced_at": row.last_synced_at.isoformat(),
                 }
                 for row in rows
             ],
             "tracked_count": sum(row.is_tracked for row in rows),
+        }
+
+
+def list_label_threads(
+    label: str = "",
+    query: str = "",
+    status: str = "all",
+    sort: str = "newest",
+    page: int = 1,
+    limit: int = 25,
+) -> dict[str, object]:
+    """Threads carrying a tracked Gmail label, newest first. Read-only.
+
+    Call this for "what is in my Submissions label", "check the mails in RTR
+    Requested", or "how many threads are under Interview". `label` takes a label
+    name or an external_label_id and is matched case-insensitively; leave it
+    empty for every tracked thread. `status`: all, promoted (already an
+    application) or untracked. `query` matches subject or participants.
+
+    Every row carries the `thread_id` that get_label_thread_dossier needs to read
+    the messages themselves, and `total` is the true count for the filter.
+    """
+    with SessionLocal() as db:
+        owner_id = tenancy.owner_id()
+        resolved = None
+        if label.strip():
+            resolved = _resolve_label(db, owner_id, label)
+            if resolved is None:
+                return refused(
+                    f"no label named {label.strip()!r}",
+                    hint="Call list_gmail_labels and use a name or external_label_id it returns.",
+                )
+        try:
+            listing = label_tracking_service.list_label_threads(
+                db,
+                owner_id,
+                label=resolved,
+                q=query or None,
+                status=status,
+                sort=sort,
+                page=max(1, page),
+                limit=max(1, min(limit, 50)),
+            )
+        except HTTPException as exc:
+            return refused(
+                str(exc.detail),
+                hint="status is all, promoted or untracked; sort is newest or oldest.",
+            )
+
+        payload = listing.model_dump(mode="json")
+        for thread in payload["items"]:
+            for key in ("subject", "recruiter", "recruiter_email"):
+                thread[key] = _safe(thread[key])
+            thread["labels"] = [_safe(value) for value in thread["labels"]]
+            thread.pop("gmail_thread_link", None)
+        return {
+            "threads": payload["items"],
+            "total": payload["total"],
+            "page": max(1, page),
+            "has_next": payload["has_next"],
         }
 
 

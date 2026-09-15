@@ -131,7 +131,7 @@ def list_tracked_applications(
     sort: str = "newest",
     limit: int = 15,
 ) -> dict[str, object]:
-    """Tracked applications with linked recruiter reply times and unread counts. Read-only."""
+    """Tracked applications with linked recruiter reply times and unread counts. Use limit 50 for all. Read-only."""
     with SessionLocal() as db:
         owner_id = tenancy.owner_id()
         if not _enabled(db, owner_id):

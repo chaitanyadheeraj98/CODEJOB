@@ -2967,11 +2967,12 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
-        feature_ai_extractor_enabled=s.feature_ai_extractor_enabled,
-        feature_semantic_enabled=s.feature_semantic_enabled,
-        feature_groq_job_parser_enabled=s.feature_groq_job_parser_enabled,
+        ai_job_intelligence=bool(
+            s.feature_ai_extractor_enabled
+            or s.feature_groq_job_parser_enabled
+            or s.feature_role_manifest_enabled
+        ),
         feature_gmail_requirement_groups_enabled=s.feature_gmail_requirement_groups_enabled,
-        feature_role_manifest_enabled=s.feature_role_manifest_enabled,
         feature_strict_candidate_screening_enabled=s.feature_strict_candidate_screening_enabled,
         feature_email_tracking_enabled=s.feature_email_tracking_enabled,
         feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
@@ -3420,9 +3421,6 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
-    s.feature_ai_extractor_enabled = payload.feature_ai_extractor_enabled
-    s.feature_semantic_enabled = payload.feature_semantic_enabled
-    s.feature_groq_job_parser_enabled = payload.feature_groq_job_parser_enabled
     s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
     s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
     s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
@@ -3442,8 +3440,10 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         min(int(payload.feature_resume_tracking_sweep_interval_minutes), 1440),
     )
     provided_fields = payload.model_fields_set
-    if "feature_role_manifest_enabled" in provided_fields:
-        s.feature_role_manifest_enabled = payload.feature_role_manifest_enabled
+    if "ai_job_intelligence" in provided_fields:
+        s.feature_ai_extractor_enabled = payload.ai_job_intelligence
+        s.feature_groq_job_parser_enabled = payload.ai_job_intelligence
+        s.feature_role_manifest_enabled = payload.ai_job_intelligence
     if "feature_strict_candidate_screening_enabled" in provided_fields:
         s.feature_strict_candidate_screening_enabled = payload.feature_strict_candidate_screening_enabled
     if "candidate_work_authorizations" in provided_fields:
@@ -5119,9 +5119,11 @@ def _run_automation(
     *,
     run_key_override: str | None = None,
     items_override: list[GmailMessageCandidate] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> AutomationRunResponse:
     response = _get_orchestration_service().run_once(
-        payload, db, run_key_override=run_key_override, items_override=items_override
+        payload, db, run_key_override=run_key_override, items_override=items_override,
+        progress_callback=progress_callback,
     )
     user_settings = _get_settings(db)
     if user_settings.feature_role_manifest_enabled and response.queued_email_ids:
@@ -9112,7 +9114,7 @@ def sync_external_nvoids(
             "nvoids_sync_endpoint_failed owner_id=%r batch_limit=%s semantic_enabled=%s ai_enabled=%s",
             tenancy.owner_id(),
             resolved_batch_limit,
-            getattr(user_settings, "feature_semantic_enabled", None),
+            settings.semantic_matching_enabled,
             getattr(user_settings, "feature_ai_enabled", None),
         )
         raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc

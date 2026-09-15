@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import logging
-from typing import Any, Callable, Mapping, cast
+from typing import Any, Callable, Iterator, Mapping, cast
 
 from app.gates import EmailIntentDecision, llm_decided
 from app.job_intent_learning import approved_learning_signals_for_owner, record_pending_job_intent_learning
@@ -107,6 +107,11 @@ class RunOrchestratorRequest:
     run_source: str = "automation_run"
     run_key: str = ""
     trusted_groups: list[ConfiguredRequirementGroup] = field(default_factory=list)
+    # Called with (processed, total) after each item. Optional so every existing
+    # caller and test keeps working; the worker passes one so the Background
+    # tasks panel can show a bar that moves during the run rather than a count
+    # that jumps from 0 to done at the end.
+    progress_callback: Callable[[int, int], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +130,22 @@ class RunOrchestratorResult:
 
 
 class RunOrchestrator:
+    @staticmethod
+    def _reporting(request: RunOrchestratorRequest) -> Iterator[CandidateItem]:
+        """Yield each item, reporting it done once the loop asks for the next.
+
+        A generator rather than a call at the bottom of the loop body: that body
+        has a dozen `continue` paths, and a report placed after them would miss
+        every skipped item - which is most of a typical run. Reporting on the
+        *next* pull covers every exit from the body, including the last item,
+        whose report fires when the loop exhausts the generator.
+        """
+        total = len(request.items)
+        for index, item in enumerate(request.items, 1):
+            yield item
+            if request.progress_callback is not None:
+                request.progress_callback(index, total)
+
     def execute(self, request: RunOrchestratorRequest) -> RunOrchestratorResult:
         matched_count = len(request.items)
         queued_count = 0
@@ -138,7 +159,7 @@ class RunOrchestrator:
         ai_last_finished_at: datetime | None = None
         ai_last_duration_ms: int | None = None
 
-        for item in request.items:
+        for item in self._reporting(request):
             external_message_id = str(item["external_message_id"])
             existing = (
                 request.db.query(RecruiterEmail)
@@ -248,11 +269,10 @@ class RunOrchestrator:
             if recruiter_like_mode in {"block", "warn"} and not recruiter_like:
                 recruiter_like_warning = "non_recruiter_like_gmail"
             parse_body = prepare_gmail_parse_body(body)
-            manifest_result: RoleManifestResult | None = None
-            if request.user_settings.feature_role_manifest_enabled:
-                manifest_result = RoleManifestService(max_rung=2).detect(parse_body)
-            item_ai_extractor_enabled = request.user_settings.feature_ai_extractor_enabled and (
-                manifest_result is None or manifest_result.status != "multiple"
+            manifest_result = RoleManifestService(max_rung=2).detect(parse_body)
+            item_ai_extractor_enabled = (
+                request.user_settings.feature_ai_extractor_enabled
+                and manifest_result.status != "multiple"
             )
             parsed_for_selection, parser_details = request.deps.parse_email_with_details(
                 subject,

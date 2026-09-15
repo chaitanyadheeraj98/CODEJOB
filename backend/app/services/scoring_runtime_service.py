@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from app.ai.resume_context import extract_resume_context
+from app.config import settings as app_settings
 from app.models import RecruiterEmail, ResumeAsset, UserSettings
 from app.parsing.jd_requirements import requirements_from_payload
 from app.parsing.skill_audit import audit_skills_text
@@ -569,7 +570,7 @@ class ScoringRuntimeService:
                 parsed=parsed,
                 email_row=email_row,
             )
-            if user_settings.feature_semantic_enabled
+            if app_settings.semantic_matching_enabled
             else None
         )
 
@@ -1563,7 +1564,7 @@ class ScoringRuntimeService:
 
         semantic_similarity_score = 0.0
         semantic_used = False
-        if user_settings.feature_semantic_enabled:
+        if app_settings.semantic_matching_enabled:
             email_embedding = embedding_from_json(email_embedding_json)
             resume_embedding = embedding_from_json(resume_embedding_json)
             if email_embedding and resume_embedding:
@@ -1742,7 +1743,7 @@ class ScoringRuntimeService:
             thread_snapshot_used=snapshot_used,
             thread_snapshot_email_id=snapshot_email_id,
         )
-        if not user_settings.feature_semantic_enabled:
+        if not app_settings.semantic_matching_enabled:
             return keyword_score, keyword_summary, "v1_rules_plus_ai", None, None, base_diag
 
         latest_block, source = self._extract_latest_message_block(body)

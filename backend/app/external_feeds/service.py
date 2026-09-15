@@ -12,6 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.ai.reply_service import generate_reply_with_ai_or_fallback
+from app.config import settings as app_settings
 from app.automation.queue_preparation import (
     QueuePreparationDependencies,
     QueuePreparationRequest,
@@ -345,7 +346,7 @@ class ExternalFeedService:
             max_items,
             query,
             location_filters,
-            getattr(user_settings, "feature_semantic_enabled", None),
+            app_settings.semantic_matching_enabled,
             getattr(user_settings, "feature_ai_enabled", None),
             getattr(user_settings, "qualification_threshold", None),
         )

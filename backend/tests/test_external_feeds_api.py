@@ -1304,8 +1304,7 @@ Job ID: ENG-2"""
                 "feature_auto_send": False,
                 "feature_retry_queue": False,
                 "feature_ai_enabled": False,
-                "feature_ai_extractor_enabled": True,
-                "feature_semantic_enabled": False,
+                "ai_job_intelligence": True,
                 "draft_text_size": "huge",
                 "fallback_draft_template": "",
                 "signature_name": "",
@@ -1325,7 +1324,12 @@ Job ID: ENG-2"""
         payload = res.json()
         self.assertEqual(payload["nvoids_detail_title_mode"], "hotlist_details")
         self.assertEqual(payload["nvoids_locations"], ["texas", "remote"])
-        self.assertTrue(payload["feature_ai_extractor_enabled"])
+        self.assertTrue(payload["ai_job_intelligence"])
+        with self.SessionLocal() as db:
+            settings_row = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).one()
+            self.assertTrue(settings_row.feature_ai_extractor_enabled)
+            self.assertTrue(settings_row.feature_groq_job_parser_enabled)
+            self.assertTrue(settings_row.feature_role_manifest_enabled)
         self.assertEqual(payload["draft_text_size"], "huge")
         self.assertEqual(
             payload["preferred_employer_cc_emails"],
@@ -1356,7 +1360,7 @@ Job ID: ENG-2"""
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertFalse(payload["enabled"])
-        self.assertTrue(payload["feature_role_manifest_enabled"])
+        self.assertTrue(payload["ai_job_intelligence"])
         self.assertTrue(payload["feature_strict_candidate_screening_enabled"])
         self.assertEqual(payload["candidate_work_authorizations"], ["H1B"])
         self.assertEqual(payload["candidate_total_experience_years"], 7)
@@ -1366,7 +1370,7 @@ Job ID: ENG-2"""
         cleared = self.client.put(
             "/settings",
             json={
-                "feature_role_manifest_enabled": False,
+                "ai_job_intelligence": False,
                 "feature_strict_candidate_screening_enabled": False,
                 "candidate_work_authorizations": None,
                 "candidate_total_experience_years": None,
@@ -1377,12 +1381,17 @@ Job ID: ENG-2"""
 
         self.assertEqual(cleared.status_code, 200, cleared.text)
         cleared_payload = cleared.json()
-        self.assertFalse(cleared_payload["feature_role_manifest_enabled"])
+        self.assertFalse(cleared_payload["ai_job_intelligence"])
         self.assertFalse(cleared_payload["feature_strict_candidate_screening_enabled"])
         self.assertEqual(cleared_payload["candidate_work_authorizations"], [])
         self.assertIsNone(cleared_payload["candidate_total_experience_years"])
         self.assertIsNone(cleared_payload["candidate_us_experience_years"])
         self.assertEqual(cleared_payload["candidate_current_location"], "")
+        with self.SessionLocal() as db:
+            settings_row = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).one()
+            self.assertFalse(settings_row.feature_ai_extractor_enabled)
+            self.assertFalse(settings_row.feature_groq_job_parser_enabled)
+            self.assertFalse(settings_row.feature_role_manifest_enabled)
 
     def test_settings_bootstrap_returns_atomic_settings_domain_payload(self) -> None:
         settings_res = self.client.get("/settings")
@@ -2168,12 +2177,13 @@ Job ID: ENG-2"""
         self._add_resume()
         original_generate = external_feed_service_module.generate_reply_with_ai_or_fallback
         original_compute = main.external_feed_service.scoring_runtime.compute_blended_ai_score
+        original_semantic_matching_enabled = main.settings.semantic_matching_enabled
         try:
+            main.settings.semantic_matching_enabled = True
             with self.SessionLocal() as db:
                 settings = db.query(UserSettings).filter(UserSettings.owner_id == main.settings.owner_id).first()
                 assert settings is not None
                 settings.feature_ai_enabled = True
-                settings.feature_semantic_enabled = True
                 settings.qualification_threshold = 0.6
                 db.commit()
 
@@ -2234,6 +2244,7 @@ Job ID: ENG-2"""
                 self.assertEqual(row.semantic_chunks, 2)
                 self.assertEqual(row.semantic_embedding, "[0.1,0.2]")
         finally:
+            main.settings.semantic_matching_enabled = original_semantic_matching_enabled
             external_feed_service_module.generate_reply_with_ai_or_fallback = original_generate
             main.external_feed_service.scoring_runtime.compute_blended_ai_score = original_compute
 
