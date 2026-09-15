@@ -1,0 +1,63 @@
+import { describe, expect, it } from 'vitest'
+
+import type { ApplicationCard } from '../premium_numbers/types'
+import { toJourney } from './journey'
+
+function application(overrides: Partial<ApplicationCard> = {}): ApplicationCard {
+  return {
+    id: 1,
+    status: 'matched',
+    status_changed_at: '2026-01-01T00:00:00Z',
+    created_at: '2026-01-01T00:00:00Z',
+    events: [],
+    rtr_history: [],
+    interviews: [],
+    milestones_reached: {},
+    rejection_detail_tags: [],
+    ...overrides,
+  } as ApplicationCard
+}
+
+describe('toJourney', () => {
+  it('sorts out-of-order status events by timestamp', () => {
+    const nodes = toJourney(application({
+      status: 'resume_shared',
+      events: [
+        { id: 2, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"contacted","to":"resume_shared"}', occurred_at: '2026-01-03T00:00:00Z' },
+        { id: 1, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"matched","to":"contacted"}', occurred_at: '2026-01-02T00:00:00Z' },
+      ],
+    }))
+    expect(nodes.map((node) => node.title)).toEqual(['Contacted', 'Resume Shared'])
+  })
+
+  it('re-sorts newest-first RTR history into ascending time', () => {
+    const nodes = toJourney(application({
+      rtr_history: [
+        { id: 2, status: 'confirmed', role_scope: 'B', end_client_scope: 'Client', requested_at: '2026-01-03T00:00:00Z', confirmed_at: '2026-01-04T00:00:00Z', expires_at: null, proof_attachment_id: null, proof_recruiter_email_id: 1, note: '' },
+        { id: 1, status: 'revoked', role_scope: 'A', end_client_scope: 'Client', requested_at: '2026-01-02T00:00:00Z', confirmed_at: null, expires_at: null, proof_attachment_id: null, proof_recruiter_email_id: null, note: '' },
+      ],
+    }))
+    expect(nodes.filter((node) => node.kind === 'rtr').map((node) => node.id)).toEqual(['rtr:1', 'rtr:2'])
+  })
+
+  it('synthesizes the current head when status history is empty', () => {
+    const nodes = toJourney(application({ status: 'rtr_confirmed' }))
+    expect(nodes).toContainEqual(expect.objectContaining({ id: 'status:rtr_confirmed', title: 'Rtr Confirmed' }))
+  })
+
+  it('sorts an unscheduled interview last', () => {
+    const nodes = toJourney(application({
+      interviews: [
+        { id: 1, round_type: 'interview_1', scheduled_at: null, format: '', interviewer_names: '', feedback: '', result: 'scheduled', follow_up_task_note: '' },
+        { id: 2, round_type: 'recruiter_screen', scheduled_at: '2026-01-02T00:00:00Z', format: 'phone', interviewer_names: '', feedback: '', result: 'completed', follow_up_task_note: '' },
+      ],
+    }))
+    expect(nodes.at(-1)?.id).toBe('interview:1')
+  })
+
+  it('does not derive nodes from milestones', () => {
+    const withoutMilestones = toJourney(application({ status: 'resume_shared' }))
+    const withMilestones = toJourney(application({ status: 'resume_shared', milestones_reached: { hired: '2026-01-05T00:00:00Z' } }))
+    expect(withMilestones.map((node) => node.id)).toEqual(withoutMilestones.map((node) => node.id))
+  })
+})

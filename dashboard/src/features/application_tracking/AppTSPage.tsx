@@ -6,6 +6,7 @@ import { formatAtsScore, getAtsStrengthLabel, renderContactDetailsGrid } from '.
 import { filterSortRegistry, resolveRegistryEntry } from '../../filterSortRegistry'
 import { CategoryChip, StatusBadge } from '../premium_numbers/StatusBadge'
 import VerificationBadge from '../premium_numbers/VerificationBadge'
+import JourneyColumn from './JourneyColumn'
 import {
   ApplicationDuplicateConflictError,
   RoleManifestForkRequiredError,
@@ -516,6 +517,7 @@ export default function AppTSPage({ apiBase, refreshToken, activeTab = 'bookmark
                     <section className="applicationTimeline" aria-label={`Timeline for ${currentTitle}`}>
                       {!detail ? <p className="subtle">Loading timeline...</p> : (
                         <>
+                          <JourneyColumn application={detail} />
                           <section className="detailSection applicationWorkflowPanel">
                             <h4>Client submission</h4>
                             {item.status === 'submitted_to_client' ? <p className="subtle">Submitted {dateTimeLabel(item.submitted_to_client_at)}</p> : (

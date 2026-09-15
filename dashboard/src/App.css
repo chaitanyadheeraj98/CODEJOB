@@ -4569,6 +4569,79 @@ button.emailSearchResult:focus-visible {
   white-space: pre-wrap;
 }
 
+.applicationJourney {
+  display: grid;
+  gap: 12px;
+}
+
+.applicationJourney > h4 {
+  margin: 0;
+}
+
+.applicationJourneyList {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.applicationJourneyNode {
+  position: relative;
+  grid-template-columns: 28px 1fr;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 0 14px;
+  border: 0;
+}
+
+.applicationJourneyNode:not(:last-child)::after {
+  position: absolute;
+  top: 24px;
+  bottom: 0;
+  left: 11px;
+  width: 2px;
+  background: var(--line);
+  content: '';
+}
+
+.applicationJourneyNode--branch {
+  margin-left: 36px;
+}
+
+.applicationJourneyMarker {
+  z-index: 1;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 2px solid #4f73c8;
+  border-radius: 50%;
+  background: var(--surface);
+  color: #355aa7;
+  font-weight: 800;
+}
+
+.applicationJourneyNode--waiting .applicationJourneyMarker {
+  border-color: #b77b16;
+  color: #8a5a0c;
+}
+
+.applicationJourneyNode--failed .applicationJourneyMarker {
+  border-color: #c44848;
+  color: #a62f2f;
+}
+
+.applicationJourneyNode--corrected > div {
+  text-decoration: line-through;
+  opacity: .7;
+}
+
+.applicationJourneyNode time,
+.applicationJourneyNode small {
+  display: block;
+}
+
 .applicationEventForm {
   display: grid;
   gap: 10px;
