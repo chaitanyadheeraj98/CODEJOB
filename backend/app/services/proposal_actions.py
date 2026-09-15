@@ -60,11 +60,14 @@ def _text(value: object) -> str:
 
 def _number(value: object) -> int:
     if isinstance(value, bool):
-        return int(value)
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
         return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value)
+    return 0
 
 
 def _numbers(value: object) -> list[int]:
@@ -73,9 +76,7 @@ def _numbers(value: object) -> list[int]:
     return [
         int(item)
         for item in value
-        if not isinstance(item, bool)
-        and isinstance(item, (int, float))
-        and math.isfinite(item)
+        if isinstance(item, int) and not isinstance(item, bool)
     ]
 
 

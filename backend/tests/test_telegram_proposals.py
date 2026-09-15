@@ -2,12 +2,14 @@ import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
 from app.models import ChatMessage, ChatSession, UserSettings
 from app.runtime_state import runtime_state
+from app.services import proposal_actions
 from app.services.chat_service import ChatService
 from app.services.proposal_actions import PROPOSAL_ACTIONS
 from app.services.telegram_format import EMAIL_PROPOSAL_TOOLS, email_proposal, plain_text, proposal_card
@@ -30,7 +32,7 @@ def _payload(**overrides):
     return value
 
 
-def _runtime(payload=None):
+def _runtime(payload=None, *, tool_name=None, actions_enabled=True):
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, future=True)
@@ -44,7 +46,7 @@ def _runtime(payload=None):
         proposal = ChatMessage(
             session_id=session.id,
             role="tool",
-            tool_name=(
+            tool_name=tool_name or (
                 "propose_new_email"
                 if (payload or {}).get("action") == "send_new_email"
                 else "propose_send_email"
@@ -54,6 +56,10 @@ def _runtime(payload=None):
         db.add(proposal)
         db.commit()
         proposal_id = proposal.id
+    def require_chat_actions_enabled():
+        if not actions_enabled:
+            raise HTTPException(404, "Chat actions are disabled")
+
     runtime = TelegramRuntime(
         TelegramRuntimeDeps(
             session_factory=factory,
@@ -78,6 +84,7 @@ def _runtime(payload=None):
             send_chat_reply=lambda email_id, request, _db: sent.append((email_id, request)) or {"sent": True},
             send_chat_new_email=lambda request, _db: composed.append(request) or {"sent": True},
             record_proposal_outcome=ChatService().record_proposal_outcome,
+            require_chat_actions_enabled=require_chat_actions_enabled,
         )
     )
     return runtime, factory, engine, proposal_id, sent, composed
@@ -271,6 +278,142 @@ def test_confirm_sends_and_records_event() -> None:
         engine.dispose()
 
 
+def test_generic_confirm_executes_only_the_stored_ids_and_records_event(monkeypatch) -> None:
+    payload = {"action": "approve_candidates", "candidate_ids": [2, 4], "count": 2}
+    runtime, factory, engine, proposal_id, _sent, _composed = _runtime(
+        payload,
+        tool_name="propose_bulk_approve_candidates",
+    )
+    approved: list[int] = []
+    monkeypatch.setattr(
+        proposal_actions,
+        "_main",
+        lambda: SimpleNamespace(
+            approve_bulk_candidates=lambda request, _db: approved.extend(request.ids)
+            or {"succeeded_ids": approved}
+        ),
+    )
+    runtime_state.telegram_auth_sessions[11] = datetime.now(UTC) + timedelta(minutes=5)
+    try:
+        reply = runtime.handle_callback(11, "u", "name", f"act:prop:send:{proposal_id}", 55)
+        assert isinstance(reply, TelegramReply)
+        assert approved == [2, 4]
+        with factory() as db:
+            event = db.query(ChatMessage).filter_by(role="event").one()
+            assert json.loads(event.tool_call_args)["outcome"] == "confirmed"
+    finally:
+        runtime_state.telegram_auth_sessions.pop(11, None)
+        engine.dispose()
+
+
+def test_generic_cancel_records_cancelled_and_executes_nothing(monkeypatch) -> None:
+    payload = {"action": "approve_candidates", "candidate_ids": [2, 4], "count": 2}
+    runtime, factory, engine, proposal_id, _sent, _composed = _runtime(
+        payload,
+        tool_name="propose_bulk_approve_candidates",
+    )
+    executed: list[object] = []
+    monkeypatch.setattr(
+        proposal_actions,
+        "_main",
+        lambda: SimpleNamespace(
+            approve_bulk_candidates=lambda request, _db: executed.append(request.ids)
+        ),
+    )
+    runtime_state.telegram_auth_sessions[11] = datetime.now(UTC) + timedelta(minutes=5)
+    try:
+        reply = runtime.handle_callback(11, "u", "name", f"act:prop:cancel:{proposal_id}", 55)
+        assert isinstance(reply, TelegramReply)
+        assert "Approve 2 Emails cancelled" in reply.text
+        assert executed == []
+        with factory() as db:
+            event = db.query(ChatMessage).filter_by(role="event").one()
+            assert json.loads(event.tool_call_args)["outcome"] == "cancelled"
+    finally:
+        runtime_state.telegram_auth_sessions.pop(11, None)
+        engine.dispose()
+
+
+def test_generic_confirm_requires_an_active_auth_session(monkeypatch) -> None:
+    payload = {"action": "approve_candidates", "candidate_ids": [2], "count": 1}
+    runtime, _factory, engine, proposal_id, _sent, _composed = _runtime(
+        payload,
+        tool_name="propose_bulk_approve_candidates",
+    )
+    executed: list[object] = []
+    monkeypatch.setattr(
+        proposal_actions,
+        "_main",
+        lambda: SimpleNamespace(
+            approve_bulk_candidates=lambda request, _db: executed.append(request.ids)
+        ),
+    )
+    runtime_state.telegram_auth_sessions.pop(11, None)
+    try:
+        reply = runtime.handle_callback(11, "u", "name", f"act:prop:send:{proposal_id}", 55)
+        assert isinstance(reply, TelegramReply)
+        assert "PIN" in reply.text
+        assert executed == []
+    finally:
+        runtime_state.telegram_pending_inputs.pop(11, None)
+        engine.dispose()
+
+
+def test_generic_cancel_requires_an_active_auth_session(monkeypatch) -> None:
+    payload = {"action": "approve_candidates", "candidate_ids": [2], "count": 1}
+    runtime, factory, engine, proposal_id, _sent, _composed = _runtime(
+        payload,
+        tool_name="propose_bulk_approve_candidates",
+    )
+    executed: list[object] = []
+    monkeypatch.setattr(
+        proposal_actions,
+        "_main",
+        lambda: SimpleNamespace(
+            approve_bulk_candidates=lambda request, _db: executed.append(request.ids)
+        ),
+    )
+    runtime_state.telegram_auth_sessions.pop(11, None)
+    try:
+        reply = runtime.handle_callback(11, "u", "name", f"act:prop:cancel:{proposal_id}", 55)
+        assert isinstance(reply, TelegramReply)
+        assert "PIN" in reply.text
+        assert executed == []
+        with factory() as db:
+            assert db.query(ChatMessage).filter_by(role="event").count() == 0
+    finally:
+        runtime_state.telegram_pending_inputs.pop(11, None)
+        engine.dispose()
+
+
+def test_generic_confirm_refuses_when_chat_actions_are_disabled(monkeypatch) -> None:
+    payload = {"action": "approve_candidates", "candidate_ids": [2], "count": 1}
+    runtime, factory, engine, proposal_id, _sent, _composed = _runtime(
+        payload,
+        tool_name="propose_bulk_approve_candidates",
+        actions_enabled=False,
+    )
+    executed: list[object] = []
+    monkeypatch.setattr(
+        proposal_actions,
+        "_main",
+        lambda: SimpleNamespace(
+            approve_bulk_candidates=lambda request, _db: executed.append(request.ids)
+        ),
+    )
+    runtime_state.telegram_auth_sessions[11] = datetime.now(UTC) + timedelta(minutes=5)
+    try:
+        reply = runtime.handle_callback(11, "u", "name", f"act:prop:send:{proposal_id}", 55)
+        assert isinstance(reply, TelegramReply)
+        assert reply.text == "Chat actions are disabled. Nothing was changed."
+        assert executed == []
+        with factory() as db:
+            assert db.query(ChatMessage).filter_by(role="event").count() == 0
+    finally:
+        runtime_state.telegram_auth_sessions.pop(11, None)
+        engine.dispose()
+
+
 def test_confirm_requires_an_active_auth_session() -> None:
     runtime, _factory, engine, proposal_id, sent, _composed = _runtime()
     runtime_state.telegram_auth_sessions.pop(11, None)
@@ -286,6 +429,7 @@ def test_confirm_requires_an_active_auth_session() -> None:
 
 def test_cancel_sends_nothing_and_records_event() -> None:
     runtime, factory, engine, proposal_id, sent, _composed = _runtime()
+    runtime_state.telegram_auth_sessions[11] = datetime.now(UTC) + timedelta(minutes=5)
     try:
         reply = runtime.handle_callback(11, "u", "name", f"act:prop:cancel:{proposal_id}", 55)
         assert isinstance(reply, TelegramReply)
@@ -295,6 +439,7 @@ def test_cancel_sends_nothing_and_records_event() -> None:
             event = db.query(ChatMessage).filter_by(role="event").one()
             assert json.loads(event.tool_call_args)["outcome"] == "cancelled"
     finally:
+        runtime_state.telegram_auth_sessions.pop(11, None)
         engine.dispose()
 
 
@@ -426,6 +571,7 @@ def test_composing_to_a_known_address_sends_on_the_first_tap() -> None:
 
 def test_cancelling_a_composed_email_sends_nothing() -> None:
     runtime, factory, engine, proposal_id, _sent, composed = _runtime(_new_email_payload())
+    runtime_state.telegram_auth_sessions[11] = datetime.now(UTC) + timedelta(minutes=5)
     try:
         runtime.handle_callback(11, "u", "name", f"act:prop:cancel:{proposal_id}", 55)
         assert composed == []
@@ -433,4 +579,5 @@ def test_cancelling_a_composed_email_sends_nothing() -> None:
             event = db.query(ChatMessage).filter_by(role="event").one()
             assert json.loads(event.tool_call_args)["outcome"] == "cancelled"
     finally:
+        runtime_state.telegram_auth_sessions.pop(11, None)
         engine.dispose()

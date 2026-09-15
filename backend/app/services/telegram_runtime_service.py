@@ -22,7 +22,8 @@ from app.schemas import (
     RejectRequest,
 )
 from app.services import account_service, telegram_chat_service, telegram_link_service
-from app.services.telegram_format import EMAIL_PROPOSAL_TOOLS, escape
+from app.services.proposal_actions import PROPOSAL_ACTIONS
+from app.services.telegram_format import EMAIL_PROPOSAL_TOOLS, escape, proposal_card
 from app.services.telegram_runtime import TelegramRuntimeState
 from app.telegram_bot import TelegramReply
 
@@ -55,6 +56,7 @@ class TelegramRuntimeDeps:
     send_chat_reply: Callable[[int, ChatSendReplyRequest, Session], dict[str, object]] | None = None
     send_chat_new_email: Callable[[ChatNewEmailRequest, Session], dict[str, object]] | None = None
     record_proposal_outcome: Callable[..., ChatMessage] | None = None
+    require_chat_actions_enabled: Callable[[], None] | None = None
 
 
 class TelegramRuntime:
@@ -772,7 +774,7 @@ class TelegramRuntime:
                 proposal_message_id = int(raw_id)
             except ValueError:
                 return TelegramReply(text="Invalid proposal.", edit_message_id=message_id, callback_notice="Invalid proposal.")
-            if action_name in {"send", "force"} and not TelegramRuntimeState.session_is_active(chat_id):
+            if not TelegramRuntimeState.session_is_active(chat_id):
                 TelegramRuntimeState.set_pending_mode(chat_id, f"await_auth_pin|{callback_data}|{message_id}")
                 return TelegramReply(
                     text=self._pending_prompt("await_auth_pin"),
@@ -788,20 +790,30 @@ class TelegramRuntime:
                     .filter(
                         ChatMessage.id == proposal_message_id,
                         ChatMessage.role == "tool",
-                        ChatMessage.tool_name.in_(EMAIL_PROPOSAL_TOOLS),
+                        ChatMessage.tool_name.in_(tuple(PROPOSAL_ACTIONS)),
                         ChatSession.owner_id == tenancy.owner_id(),
                     )
                     .first()
                 )
                 if proposal is None:
                     return TelegramReply(text="Proposal not found.", edit_message_id=message_id, callback_notice="Not found.")
-                from app.services.telegram_format import email_proposal
-
-                rendered = email_proposal(proposal.content, proposal.id)
+                rendered = proposal_card(proposal.tool_name, proposal.content, proposal.id)
                 if rendered is None or rendered[1] is None:
                     return TelegramReply(text="This proposal is incomplete.", edit_message_id=message_id, callback_notice="Incomplete.")
                 if self.deps.record_proposal_outcome is None:
                     raise RuntimeError("Proposal outcome recorder is unavailable")
+                if self.deps.require_chat_actions_enabled is None:
+                    raise RuntimeError("Chat action gate is unavailable")
+                try:
+                    self.deps.require_chat_actions_enabled()
+                except HTTPException:
+                    return TelegramReply(
+                        text="Chat actions are disabled. Nothing was changed.",
+                        edit_message_id=message_id,
+                        callback_notice="Actions disabled.",
+                    )
+                payload = json.loads(proposal.content)
+                action = PROPOSAL_ACTIONS[proposal.tool_name]
                 if action_name == "cancel":
                     self.deps.record_proposal_outcome(
                         db,
@@ -810,15 +822,61 @@ class TelegramRuntime:
                         outcome="cancelled",
                         proposal_message_id=proposal.id,
                     )
+                    cancelled = (
+                        "Email"
+                        if proposal.tool_name in EMAIL_PROPOSAL_TOOLS
+                        else escape(action.confirm_label(payload))
+                    )
                     return TelegramReply(
-                        text="Email cancelled. Nothing was sent.",
+                        text=f"{cancelled} cancelled. Nothing was changed.",
                         inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
                         edit_message_id=message_id,
                         callback_notice="Cancelled.",
                     )
+                if proposal.tool_name not in EMAIL_PROPOSAL_TOOLS:
+                    if action_name == "force":
+                        return TelegramReply(
+                            text="Invalid proposal action.",
+                            edit_message_id=message_id,
+                            callback_notice="Invalid action.",
+                        )
+                    try:
+                        result = action.execute(db, payload)
+                    except Exception:
+                        db.rollback()
+                        self.deps.record_proposal_outcome(
+                            db,
+                            proposal.session_id,
+                            tool_name=proposal.tool_name,
+                            outcome="failed",
+                            proposal_message_id=proposal.id,
+                        )
+                        return TelegramReply(
+                            text="Action could not be completed. Nothing was changed.",
+                            edit_message_id=message_id,
+                            callback_notice="Action failed.",
+                        )
+                    self.deps.record_proposal_outcome(
+                        db,
+                        proposal.session_id,
+                        tool_name=proposal.tool_name,
+                        outcome="confirmed",
+                        proposal_message_id=proposal.id,
+                    )
+                    result_fields = result.model_dump() if hasattr(result, "model_dump") else result
+                    queued = isinstance(result_fields, dict) and isinstance(result_fields.get("run_key"), str)
+                    return TelegramReply(
+                        text=(
+                            "Queued. It runs in the background - ask me for the result."
+                            if queued
+                            else f"{escape(action.confirm_label(payload))} completed."
+                        ),
+                        inline_keyboard=[[self._tg_btn("Home", "menu:main:0")]],
+                        edit_message_id=message_id,
+                        callback_notice="Queued." if queued else "Completed.",
+                    )
                 if self.deps.send_chat_reply is None:
                     raise RuntimeError("Telegram email sender is unavailable")
-                payload = json.loads(proposal.content)
                 unknown_recipients = [
                     str(value) for value in (payload.get("unknown_recipients") or []) if str(value).strip()
                 ]

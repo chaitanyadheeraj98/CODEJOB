@@ -2009,6 +2009,7 @@ def _init_telegram_service() -> TelegramBotService | None:
             send_chat_reply=send_chat_reply,
             send_chat_new_email=send_chat_new_email,
             record_proposal_outcome=_get_chat_service().record_proposal_outcome,
+            require_chat_actions_enabled=require_chat_actions_enabled,
         )
     )
     service = TelegramBotService(
