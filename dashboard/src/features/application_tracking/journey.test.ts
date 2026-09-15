@@ -60,6 +60,52 @@ describe('toJourney', () => {
     const withMilestones = toJourney(application({ status: 'resume_shared', milestones_reached: { hired: '2026-01-05T00:00:00Z' } }))
     expect(withMilestones.map((node) => node.id)).toEqual(withoutMilestones.map((node) => node.id))
   })
+
+  it('ends an interview journey on a terminal rejection node', () => {
+    const nodes = toJourney(application({
+      status: 'rejected',
+      status_changed_at: '2026-01-03T00:00:00Z',
+      closed_reason_code: 'skills_gap',
+      rejection_detail_tags: [{ category: 'skill', value: 'Kubernetes', source: 'ai', confirmed_at: null }],
+      events: [{ id: 2, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"interview_1","to":"rejected"}', occurred_at: '2026-01-03T00:00:00Z' }],
+      interviews: [{ id: 1, round_type: 'interview_1', scheduled_at: '2026-01-02T00:00:00Z', format: 'Teams', interviewer_names: '', feedback: '', result: 'failed', follow_up_task_note: '' }],
+    }))
+    expect(nodes.at(-1)).toEqual(expect.objectContaining({ kind: 'terminal', title: 'Rejected', state: 'failed', detail: expect.objectContaining({ closed_reason_code: 'skills_gap', rejection_tags: 'Kubernetes' }) }))
+  })
+
+  it('keeps the trunk after a revoked RTR', () => {
+    const nodes = toJourney(application({
+      status: 'client_reviewing',
+      events: [{ id: 2, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"rtr_confirmed","to":"client_reviewing"}', occurred_at: '2026-01-03T00:00:00Z' }],
+      rtr_history: [{ id: 1, status: 'revoked', role_scope: 'Java', end_client_scope: 'Acme', requested_at: '2026-01-02T00:00:00Z', confirmed_at: null, expires_at: null, proof_attachment_id: null, proof_recruiter_email_id: null, note: '' }],
+    }))
+    expect(nodes.find((node) => node.id === 'rtr:1')?.state).toBe('failed')
+    expect(nodes.at(-1)?.id).toBe('status:client_reviewing')
+  })
+
+  it('keeps both status events and marks a triggered backwards move corrected', () => {
+    const nodes = toJourney(application({
+      status: 'contacted',
+      events: [
+        { id: 1, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"contacted","to":"resume_shared"}', occurred_at: '2026-01-02T00:00:00Z' },
+        { id: 2, event_type: 'status_changed', event_source: 'user', note: '', linked_recruiter_email_id: null, metadata_json: '{"from":"resume_shared","to":"contacted","trigger":"user_correction"}', occurred_at: '2026-01-03T00:00:00Z' },
+      ],
+    }))
+    const statuses = nodes.filter((node) => node.kind === 'status')
+    expect(statuses).toHaveLength(2)
+    expect(statuses.at(-1)).toEqual(expect.objectContaining({ title: 'Contacted', state: 'corrected', detail: expect.objectContaining({ trigger: 'user_correction' }) }))
+  })
+
+  it('degrades malformed status metadata to a plain event node', () => {
+    const nodes = toJourney(application({
+      status: 'contacted',
+      events: [{ id: 1, event_type: 'status_changed', event_source: 'user', note: 'bad metadata', linked_recruiter_email_id: null, metadata_json: '{bad', occurred_at: '2026-01-02T00:00:00Z' }],
+    }))
+    expect(nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'event:1', kind: 'note', state: 'done' }),
+      expect.objectContaining({ id: 'status:contacted', kind: 'status' }),
+    ]))
+  })
 })
 
 describe('legalActions', () => {

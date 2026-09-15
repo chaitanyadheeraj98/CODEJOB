@@ -37,6 +37,10 @@ export default function JourneyColumn({ application, apiBase, duplicateConflicts
               <strong>{node.title}</strong>
               <time dateTime={node.at ?? undefined}>{dateTimeLabel(node.at)}</time>
               {node.detail.note ? <p>{node.detail.note}</p> : null}
+              {node.detail.closed_reason_code ? <small>{node.detail.closed_reason_code.replaceAll('_', ' ')}</small> : null}
+              {node.detail.closed_reason ? <p>{node.detail.closed_reason}</p> : null}
+              {node.detail.rejection_tags ? <span className="applicationJourneyTags">{node.detail.rejection_tags.split(', ').map((tag) => <span key={tag}>{tag}</span>)}</span> : null}
+              {node.state === 'corrected' && node.detail.trigger ? <small>Correction: {node.detail.trigger.replaceAll('_', ' ')}</small> : null}
               {node.detail.first_reached ? <small>First reached {dateTimeLabel(node.detail.first_reached)}</small> : null}
             </button>
           </li>

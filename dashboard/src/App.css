@@ -4663,6 +4663,22 @@ button.emailSearchResult:focus-visible {
   display: block;
 }
 
+.applicationJourneyTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.applicationJourneyTags > span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f8dddd;
+  color: #8f2929;
+  font-size: 11px;
+  text-decoration: none;
+}
+
 .applicationJourneyAdd {
   position: relative;
   padding-left: 1px;
