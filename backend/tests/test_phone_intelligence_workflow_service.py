@@ -29,6 +29,7 @@ from app.services.phone_intelligence_workflow_service import (
     _context_from_external_opportunity,
     _context_from_recruiter_email,
     apply_contact_version,
+    job_metadata_ai_extraction_from_email,
     job_metadata_ai_extraction_from_parsed,
 )
 
@@ -1266,7 +1267,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(snapshot.work_mode, "Onsite")
         self.assertEqual(snapshot.visa_restrictions, "H1B, GC")
 
-    def test_build_snapshot_falls_back_to_regex_job_metadata_when_context_blank(self) -> None:
+    def test_build_snapshot_does_not_guess_work_mode_from_body_when_context_blank(self) -> None:
         context = PhoneWorkflowSourceContext(
             owner_id="default-owner",
             source="nvoids",
@@ -1281,7 +1282,7 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         )
         snapshot = PhoneIntelligenceWorkflowService()._build_snapshot(7, context, _lead())
         self.assertEqual(snapshot.job_title, "Java Backend Engineer")
-        self.assertEqual(snapshot.work_mode, "Remote")
+        self.assertEqual(snapshot.work_mode, "")
 
     def test_job_metadata_ai_extraction_from_parsed_uses_ai_result_when_primary(self) -> None:
         parsed = {
@@ -1310,8 +1311,8 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
     def test_job_metadata_ai_extraction_from_parsed_leaves_work_mode_and_visa_blank_when_not_ai_primary(self) -> None:
         # AI extractor failed or was disabled: parse_email_with_details already fell back
         # to the base regex parser for `parsed`, but work_mode/visa_hints only ever come
-        # from the AI payload, so those two must stay blank -> _build_snapshot's own
-        # regex fallback (`_extract_job_metadata`) is what fills them, not this function.
+        # from the AI payload, so those two must stay blank here. _build_snapshot may still
+        # extract visa tokens, but a blank work mode remains blank.
         parsed = {"role": "Java Developer", "location": "Dallas"}
         parser_details = {"parser_mode": "ai_fallback", "ai_extractor_result": None}
         extraction = job_metadata_ai_extraction_from_parsed(parsed, parser_details)
@@ -1319,6 +1320,83 @@ class PhoneIntelligenceWorkflowServiceTests(unittest.TestCase):
         self.assertEqual(extraction.location, "Dallas")
         self.assertEqual(extraction.work_mode, "")
         self.assertEqual(extraction.visa_restrictions, "")
+
+    def test_job_metadata_ai_extraction_from_email_handles_primary_and_invalid_payloads(self) -> None:
+        email = RecruiterEmail(
+            role="Senior Python Engineer",
+            location="Austin, TX",
+            domain="Healthcare",
+            end_client="Client Co",
+            implementation_partner="Partner Co",
+            parser_details_json=json.dumps(
+                {
+                    "parser_mode": "ai_primary",
+                    "ai_extractor_result": {
+                        "work_mode": "Hybrid",
+                        "visa_hints": ["USC", "GC"],
+                    },
+                }
+            ),
+        )
+
+        extraction = job_metadata_ai_extraction_from_email(email)
+
+        self.assertEqual(extraction.job_title, "Senior Python Engineer")
+        self.assertEqual(extraction.location, "Austin, TX")
+        self.assertEqual(extraction.work_mode, "Hybrid")
+        self.assertEqual(extraction.visa_restrictions, "USC, GC")
+        for invalid_payload in (None, "", "not-json", "[]"):
+            with self.subTest(parser_details_json=invalid_payload):
+                email.parser_details_json = invalid_payload
+                self.assertEqual(job_metadata_ai_extraction_from_email(email), JobMetadataAiExtraction())
+
+    def test_fresh_gmail_and_nvoids_captures_share_ai_work_mode_and_visa(self) -> None:
+        with Session(self.engine) as db:
+            email = self._email(db, "gmail-ai-metadata-parity")
+            email.parser_details_json = json.dumps(
+                {
+                    "parser_mode": "ai_primary",
+                    "ai_extractor_result": {
+                        "work_mode": "Hybrid",
+                        "visa_hints": ["USC", "GC"],
+                    },
+                }
+            )
+            item = self._external(db)
+            db.commit()
+            ai_extraction = JobMetadataAiExtraction(
+                job_title=email.role,
+                location=email.location,
+                work_mode="Hybrid",
+                visa_restrictions="USC, GC",
+                domain=email.domain or "",
+                end_client=email.end_client or "",
+                implementation_partner=email.implementation_partner or "",
+            )
+            lead = _lead(
+                role="recruiter",
+                owner_name="Parity Recruiter",
+                contact_email="parity@agency.example",
+                company="Agency Co",
+                relevance_score=95,
+                relevant=True,
+                reason="external_domain",
+            )
+
+            with patch(
+                "app.services.phone_intelligence_workflow_service.extract_phone_leads",
+                return_value=[lead],
+            ):
+                service = PhoneIntelligenceWorkflowService()
+                service.capture_premium_numbers(db, email)
+                service.capture_premium_numbers_for_nvoids(db, item, item.raw_body, ai_extraction)
+
+            opportunities = db.query(RecruiterOpportunity).order_by(RecruiterOpportunity.source_type).all()
+            self.assertEqual(len(opportunities), 2)
+            self.assertEqual(
+                {(row.source_type, row.work_mode, row.visa_restrictions) for row in opportunities},
+                {("gmail", "Hybrid", "USC, GC"), ("nvoids", "Hybrid", "USC, GC")},
+            )
 
     def test_context_from_external_opportunity_prefers_ai_extraction_over_regex_fields(self) -> None:
         item = ExternalOpportunity(

@@ -157,9 +157,11 @@ from app.recent_runs import (
 from app.jobs.queues import (
     AUTOMATION_RUN_QUEUE,
     EMBEDDING_QUEUE,
+    GMAIL_EVENT_QUEUE,
     GMAIL_SYNC_QUEUE,
     MANUAL_INTAKE_QUEUE,
     NVOIDS_SYNC_QUEUE,
+    QUEUE_NAMES,
     TELEGRAM_CHAT_QUEUE,
     active_job_id,
     get_queue,
@@ -2007,6 +2009,7 @@ def _init_telegram_service() -> TelegramBotService | None:
             send_chat_reply=send_chat_reply,
             send_chat_new_email=send_chat_new_email,
             record_proposal_outcome=_get_chat_service().record_proposal_outcome,
+            require_chat_actions_enabled=require_chat_actions_enabled,
         )
     )
     service = TelegramBotService(
@@ -2964,11 +2967,12 @@ def _settings_response_from_model(s: UserSettings) -> SettingsResponse:
         feature_auto_send=s.feature_auto_send,
         feature_retry_queue=s.feature_retry_queue,
         feature_ai_enabled=s.feature_ai_enabled,
-        feature_ai_extractor_enabled=s.feature_ai_extractor_enabled,
-        feature_semantic_enabled=s.feature_semantic_enabled,
-        feature_groq_job_parser_enabled=s.feature_groq_job_parser_enabled,
+        ai_job_intelligence=bool(
+            s.feature_ai_extractor_enabled
+            or s.feature_groq_job_parser_enabled
+            or s.feature_role_manifest_enabled
+        ),
         feature_gmail_requirement_groups_enabled=s.feature_gmail_requirement_groups_enabled,
-        feature_role_manifest_enabled=s.feature_role_manifest_enabled,
         feature_strict_candidate_screening_enabled=s.feature_strict_candidate_screening_enabled,
         feature_email_tracking_enabled=s.feature_email_tracking_enabled,
         feature_reply_inbox_enabled=s.feature_reply_inbox_enabled,
@@ -3417,9 +3421,6 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
     s.feature_auto_send = payload.feature_auto_send
     s.feature_retry_queue = payload.feature_retry_queue
     s.feature_ai_enabled = payload.feature_ai_enabled
-    s.feature_ai_extractor_enabled = payload.feature_ai_extractor_enabled
-    s.feature_semantic_enabled = payload.feature_semantic_enabled
-    s.feature_groq_job_parser_enabled = payload.feature_groq_job_parser_enabled
     s.feature_gmail_requirement_groups_enabled = payload.feature_gmail_requirement_groups_enabled
     s.feature_email_tracking_enabled = payload.feature_email_tracking_enabled
     s.feature_reply_inbox_enabled = payload.feature_reply_inbox_enabled
@@ -3439,8 +3440,10 @@ def update_settings(payload: SettingsRequest, db: Session = Depends(get_db)) -> 
         min(int(payload.feature_resume_tracking_sweep_interval_minutes), 1440),
     )
     provided_fields = payload.model_fields_set
-    if "feature_role_manifest_enabled" in provided_fields:
-        s.feature_role_manifest_enabled = payload.feature_role_manifest_enabled
+    if "ai_job_intelligence" in provided_fields:
+        s.feature_ai_extractor_enabled = payload.ai_job_intelligence
+        s.feature_groq_job_parser_enabled = payload.ai_job_intelligence
+        s.feature_role_manifest_enabled = payload.ai_job_intelligence
     if "feature_strict_candidate_screening_enabled" in provided_fields:
         s.feature_strict_candidate_screening_enabled = payload.feature_strict_candidate_screening_enabled
     if "candidate_work_authorizations" in provided_fields:
@@ -5116,9 +5119,11 @@ def _run_automation(
     *,
     run_key_override: str | None = None,
     items_override: list[GmailMessageCandidate] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> AutomationRunResponse:
     response = _get_orchestration_service().run_once(
-        payload, db, run_key_override=run_key_override, items_override=items_override
+        payload, db, run_key_override=run_key_override, items_override=items_override,
+        progress_callback=progress_callback,
     )
     user_settings = _get_settings(db)
     if user_settings.feature_role_manifest_enabled and response.queued_email_ids:
@@ -5230,14 +5235,58 @@ def jobs_health() -> dict[str, object]:
 def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
     queued = 0
     processing = 0
+    queue_status = "known"
+    queue_states: list[dict[str, object]] = []
+    alerts: list[tuple[str, int]] = []
     try:
         connection = get_redis_connection()
-        for name in (GMAIL_SYNC_QUEUE, NVOIDS_SYNC_QUEUE, AUTOMATION_RUN_QUEUE):
+        now = datetime.now(UTC)
+        owner_id = tenancy.owner_id()
+        for name in sorted(QUEUE_NAMES):
             queue = get_queue(name, connection=connection)
-            queued += queue.count
-            processing += StartedJobRegistry(name=name, connection=connection).count
+            queue_count = queue.count
+            processing_count = StartedJobRegistry(name=name, connection=connection).count
+            job_ids = queue.get_job_ids(0, 1)
+            oldest_age = None
+            if job_ids:
+                job = queue.fetch_job(job_ids[0])
+                if job and job.enqueued_at:
+                    enqueued_at = job.enqueued_at
+                    if enqueued_at.tzinfo is None:
+                        enqueued_at = enqueued_at.replace(tzinfo=UTC)
+                    oldest_age = max(0, int((now - enqueued_at).total_seconds()))
+            threshold = (
+                settings.queue_age_interactive_alert_seconds
+                if name in {GMAIL_EVENT_QUEUE, TELEGRAM_CHAT_QUEUE}
+                else settings.queue_age_bulk_alert_minutes * 60
+            )
+            alert = oldest_age is not None and oldest_age >= threshold
+            alert_key = f"queue-age-alert:{owner_id}:{name}"
+            if alert:
+                if connection.set(alert_key, "1", nx=True):
+                    alerts.append((name, oldest_age))
+            else:
+                connection.delete(alert_key)
+            queued += queue_count
+            processing += processing_count
+            queue_states.append(
+                {
+                    "name": name,
+                    "queued": queue_count,
+                    "processing": processing_count,
+                    "oldest_queued_age_seconds": oldest_age,
+                    "alert": alert,
+                }
+            )
     except Exception:
+        queue_status = "unknown"
+        queue_states = []
         logger.exception("jobs_summary_redis_unavailable")
+    if alerts and telegram_service:
+        telegram_service.notify_owner(
+            tenancy.owner_id(),
+            "Queue delay: " + ", ".join(f"{name} oldest job {age}s" for name, age in alerts),
+        )
     succeeded = (
         db.query(RecentRun)
         .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.status == "ok")
@@ -5248,7 +5297,14 @@ def jobs_summary(db: Session = Depends(get_db)) -> JobQueueSummaryResponse:
         .filter(RecentRun.owner_id == tenancy.owner_id(), RecentRun.status == "failed")
         .count()
     )
-    return JobQueueSummaryResponse(queued=queued, processing=processing, succeeded=succeeded, failed=failed)
+    return JobQueueSummaryResponse(
+        queued=queued,
+        processing=processing,
+        succeeded=succeeded,
+        failed=failed,
+        queue_status=queue_status,
+        queues=queue_states,
+    )
 
 
 @app.get("/gmail/live-replies", response_model=LiveReplyStatusResponse)
@@ -9058,7 +9114,7 @@ def sync_external_nvoids(
             "nvoids_sync_endpoint_failed owner_id=%r batch_limit=%s semantic_enabled=%s ai_enabled=%s",
             tenancy.owner_id(),
             resolved_batch_limit,
-            getattr(user_settings, "feature_semantic_enabled", None),
+            settings.semantic_matching_enabled,
             getattr(user_settings, "feature_ai_enabled", None),
         )
         raise HTTPException(status_code=502, detail=f"nvoids_sync_failed: {exc}") from exc
@@ -9896,28 +9952,29 @@ def list_appts_applications(
     db: Session = Depends(get_db),
 ) -> ApplicationListResponse:
     _require_applications_enabled(db)
-    if sort not in {"newest", "oldest", "next_action"}: raise HTTPException(status_code=422, detail="Invalid sort")
-    query = db.query(AppTSApplication).filter(AppTSApplication.owner_id == tenancy.owner_id(), AppTSApplication.deleted_at.is_(None))
-    if status:
-        if status not in APPLICATION_STATUS_VALUES: raise HTTPException(status_code=422, detail="Invalid application status")
-        query = query.filter(AppTSApplication.status == status)
-    if q and q.strip():
-        like = f"%{q.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_name_snapshot.ilike(like), AppTSApplication.recruiter_company_snapshot.ilike(like), AppTSApplication.job_title_snapshot.ilike(like), AppTSApplication.end_client_snapshot.ilike(like), AppTSApplication.manual_recruiter_email.ilike(like)))
-    if company and company.strip():
-        like = f"%{company.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_company_snapshot.ilike(like), AppTSApplication.end_client_snapshot.ilike(like)))
-    if recruiter and recruiter.strip():
-        like = f"%{recruiter.strip()}%"; query = query.filter(or_(AppTSApplication.recruiter_name_snapshot.ilike(like), AppTSApplication.manual_recruiter_email.ilike(like)))
-    if end_client and end_client.strip(): query = query.filter(AppTSApplication.end_client_snapshot.ilike(f"%{end_client.strip()}%"))
-    if role and role.strip(): query = query.filter(AppTSApplication.job_title_snapshot.ilike(f"%{role.strip()}%"))
-    if has_premium_contact is not None: query = query.filter(AppTSApplication.recruiter_contact_id.is_not(None) if has_premium_contact else AppTSApplication.recruiter_contact_id.is_(None))
-    if tracked is not None: query = query.filter(AppTSApplication.recruiter_opportunity_id.is_not(None) if tracked else AppTSApplication.recruiter_opportunity_id.is_(None))
-    if date_filter:
-        start, end = _date_range_utc_window(date_filter, date_from, date_to); query = query.filter(AppTSApplication.created_at >= start, AppTSApplication.created_at < end)
-    total = query.count()
-    query = query.order_by(AppTSApplication.created_at.asc(), AppTSApplication.id.asc()) if sort == "oldest" else query.order_by(AppTSApplication.next_action_at.is_(None), AppTSApplication.next_action_at.asc(), AppTSApplication.id.asc()) if sort == "next_action" else query.order_by(AppTSApplication.created_at.desc(), AppTSApplication.id.desc())
-    rows = query.offset(cursor).limit(limit + 1).all(); visible = rows[:limit]
+    start, end = _date_range_utc_window(date_filter, date_from, date_to) if date_filter else (None, None)
+    try:
+        visible, total, has_next = appts_service.query_applications(
+            db,
+            tenancy.owner_id(),
+            status=status,
+            q=q,
+            company=company,
+            recruiter=recruiter,
+            end_client=end_client,
+            role=role,
+            has_premium_contact=has_premium_contact,
+            tracked=tracked,
+            date_from=start,
+            date_to=end,
+            sort=sort,
+            cursor=cursor,
+            limit=limit,
+        )
+    except application_service.ApplicationValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     watch_count = db.query(RecruiterWatch).filter(RecruiterWatch.owner_id == tenancy.owner_id(), RecruiterWatch.released_at.is_(None)).count()
-    return ApplicationListResponse(items=[_application_response(db, row, models=appts_service.APPTS_MODELS) for row in visible], next_cursor=cursor + limit if len(rows) > limit else None, has_next=len(rows) > limit, total=total, watch_count=watch_count, watch_limit=settings.label_tracking_max_watches, watch_limit_reached=watch_count >= settings.label_tracking_max_watches)
+    return ApplicationListResponse(items=[_application_response(db, row, models=appts_service.APPTS_MODELS) for row in visible], next_cursor=cursor + limit if has_next else None, has_next=has_next, total=total, watch_count=watch_count, watch_limit=settings.label_tracking_max_watches, watch_limit_reached=watch_count >= settings.label_tracking_max_watches)
 
 
 @app.get("/appts/applications/{application_id}", response_model=ApplicationResponse)

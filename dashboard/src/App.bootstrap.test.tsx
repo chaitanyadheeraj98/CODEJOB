@@ -46,11 +46,8 @@ function makeSettings(overrides?: Record<string, unknown>) {
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
-    feature_ai_extractor_enabled: false,
-    feature_semantic_enabled: false,
-    feature_groq_job_parser_enabled: false,
+    ai_job_intelligence: false,
     feature_gmail_requirement_groups_enabled: false,
-    feature_role_manifest_enabled: false,
     feature_strict_candidate_screening_enabled: false,
     candidate_work_authorizations: [],
     candidate_total_experience_years: null,
@@ -471,7 +468,12 @@ describe('Settings bootstrap flow', () => {
     expect(profile?.textContent).toContain('Total Experience Years')
     expect(profile?.textContent).toContain('U.S. Experience Years')
     expect(profile?.textContent).toContain('Current Location')
-    expect(automation?.textContent).toContain('Enable Role Manifest Detection')
+    expect(automation?.textContent).toContain('AI Reply Writing')
+    expect(automation?.textContent).toContain('AI Job Intelligence')
+    expect(automation?.textContent).not.toContain('Enable AI Extractor')
+    expect(automation?.textContent).not.toContain('Enable Role Manifest Detection')
+    expect(automation?.textContent).not.toContain('Enable Semantic Matching')
+    expect(automation?.querySelectorAll('input[type="checkbox"]')).toHaveLength(2)
     expect(automation?.textContent).not.toContain('Candidate Work Authorizations')
     const profileInputs = Array.from(profile?.querySelectorAll('input') ?? [])
     expect(profileInputs.every((input) => !input.disabled)).toBe(true)

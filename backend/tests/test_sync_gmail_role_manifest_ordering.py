@@ -143,7 +143,7 @@ class SyncGmailRoleManifestOrderingTests(unittest.TestCase):
             append_tracking_sheet_row=lambda **_k: None,
         )
 
-    def test_multi_role_email_skips_full_body_ai_extractor_and_creates_children(self) -> None:
+    def test_multi_role_email_suppresses_ai_extractor_even_when_manifest_flag_is_off(self) -> None:
         with Session(self.engine) as db:
             user_settings = UserSettings(
                 owner_id="default-owner",
@@ -154,7 +154,7 @@ class SyncGmailRoleManifestOrderingTests(unittest.TestCase):
                 qualification_threshold=0.6,
                 feature_ai_enabled=False,
                 feature_ai_extractor_enabled=True,
-                feature_role_manifest_enabled=True,
+                feature_role_manifest_enabled=False,
                 feature_semantic_enabled=False,
                 feature_groq_job_parser_enabled=False,
                 feature_gmail_requirement_groups_enabled=False,

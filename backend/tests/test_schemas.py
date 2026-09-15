@@ -109,18 +109,13 @@ class EmailResponseRoutingTests(unittest.TestCase):
         payload = SettingsRequest.model_validate({"saved_gmail_queries": ["is:unread", "tx is:unread"]})
         self.assertEqual(payload.saved_gmail_queries, ["is:unread", "tx is:unread"])
 
-    def test_settings_request_accepts_ai_extractor_toggle(self) -> None:
-        payload = SettingsRequest.model_validate({"feature_ai_extractor_enabled": True})
-        self.assertTrue(payload.feature_ai_extractor_enabled)
-
-    def test_settings_request_accepts_groq_job_parser_toggle(self) -> None:
-        payload = SettingsRequest.model_validate({"feature_groq_job_parser_enabled": True})
-        self.assertTrue(payload.feature_groq_job_parser_enabled)
+    def test_settings_request_accepts_ai_job_intelligence_toggle(self) -> None:
+        payload = SettingsRequest.model_validate({"ai_job_intelligence": True})
+        self.assertTrue(payload.ai_job_intelligence)
 
     def test_settings_request_accepts_role_manifest_and_candidate_profile(self) -> None:
         payload = SettingsRequest.model_validate(
             {
-                "feature_role_manifest_enabled": True,
                 "feature_strict_candidate_screening_enabled": True,
                 "candidate_work_authorizations": ["USC", "GC"],
                 "candidate_total_experience_years": 7,
@@ -129,7 +124,6 @@ class EmailResponseRoutingTests(unittest.TestCase):
             }
         )
 
-        self.assertTrue(payload.feature_role_manifest_enabled)
         self.assertTrue(payload.feature_strict_candidate_screening_enabled)
         self.assertEqual(payload.candidate_work_authorizations, ["USC", "GC"])
         self.assertEqual(payload.candidate_total_experience_years, 7)

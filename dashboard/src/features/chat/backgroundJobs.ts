@@ -38,13 +38,35 @@ export function isActive(job: BackgroundJob): boolean {
 const SOURCE_LABELS: Record<string, string> = {
   gmail_sync: 'Gmail sync',
   nvoids_sync: 'Nvoids feed sync',
-  automation_run: 'Automation run',
+  automation_run: 'Recruiter email check',
   manual_intake: 'Manual intake',
 }
 
 export function jobLabel(job: BackgroundJob): string {
   if (job.run_key.startsWith('nvoids_client_search:')) return 'Nvoids search'
   return SOURCE_LABELS[job.run_source] ?? job.run_source
+}
+
+// What each source is actually counting. A shared "items" would be safe and
+// useless; "3 emails" and "500 postings" are different enough that one word for
+// both tells the user nothing.
+const SOURCE_UNITS: Record<string, [string, string]> = {
+  gmail_sync: ['email', 'emails'],
+  automation_run: ['email', 'emails'],
+  nvoids_sync: ['posting', 'postings'],
+  manual_intake: ['item', 'items'],
+}
+
+// The label alone is the source, so three automation runs in a row read as one
+// repeated word and the user cannot tell which of them to stop. The size is the
+// cheapest thing that distinguishes them, and it is the thing being asked about
+// ("which one is chewing on the twelve emails?"). Omitted rather than guessed
+// while the run is still working out how much there is to do.
+export function jobHeadline(job: BackgroundJob): string {
+  const label = jobLabel(job)
+  if (!job.total_items) return label
+  const [one, many] = SOURCE_UNITS[job.run_source] ?? ['item', 'items']
+  return `${label} - ${job.total_items} ${job.total_items === 1 ? one : many}`
 }
 
 // What each stored status means where the user is reading it. Wider than the

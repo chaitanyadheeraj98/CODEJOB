@@ -224,6 +224,17 @@ def test_worker_sends_a_card_for_a_composed_email_too(monkeypatch) -> None:
     assert "starts a new thread" in seen["sent"][0][1]
 
 
+def test_worker_sends_a_card_for_a_non_email_proposal(monkeypatch) -> None:
+    payload = {"action": "approve_candidates", "candidate_ids": [9675], "count": 1}
+    tool = SimpleNamespace(
+        id=95,
+        tool_name="propose_bulk_approve_candidates",
+        content=__import__("json").dumps(payload),
+    )
+    _result, seen = _run_worker(monkeypatch, ChatTurnResult("answer", [tool]))
+    assert seen["sent"][0][2][0][0]["callback_data"] == "act:prop:send:95"
+
+
 def test_worker_ignores_a_tool_row_that_is_not_an_email_proposal(monkeypatch) -> None:
     tool = SimpleNamespace(id=95, tool_name="get_status", content="{}")
     _result, seen = _run_worker(monkeypatch, ChatTurnResult("answer", [tool]))

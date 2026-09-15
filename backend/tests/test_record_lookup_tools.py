@@ -84,7 +84,7 @@ def test_global_search_finds_rootless_messages_and_rfc_ids(factory):
         assert email_lookup_service.search_email(db, owner_id="a", query="<RFC@mail.gmail.com>")
 
 
-# Label tracking ships dark, so the pair must not reach the default registry:
+# Label tracking ships dark, so its tools must not reach the default registry:
 # the same 35-tool routing baseline RELATIONSHIP_TOOLS and SCHEDULING_TOOLS
 # protect. With the flag off there is no tracked label for a message id to
 # resolve against, so registering these would add two unusable tools to an
@@ -93,7 +93,14 @@ def test_global_search_finds_rootless_messages_and_rfc_ids(factory):
 def test_label_tracking_tools_are_gated_behind_the_feature_flag():
     from app.mcp_server import server
 
-    assert len(server.LABEL_TRACKING_TOOLS) == 1
+    # Named rather than counted: a bare count tells whoever breaks it that the
+    # number moved, not which tool escaped the gate.
+    assert {tool.__name__ for tool in server.LABEL_TRACKING_TOOLS} == {
+        "resolve_record_by_message_id",
+        "list_gmail_labels",
+        "list_label_threads",
+        "get_label_thread_dossier",
+    }
     assert len(server.LABEL_TRACKING_ACTION_TOOLS) == 1
     # Deliberately not asserting the flag's current value. It is env-backed, so
     # anyone who turns the feature on locally - which is the supported way to

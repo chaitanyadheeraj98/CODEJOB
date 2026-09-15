@@ -26,6 +26,7 @@ that silently matches nothing would make every other assertion here vacuous.
 
 import os
 import re
+import inspect
 import unittest
 from pathlib import Path
 
@@ -64,6 +65,12 @@ def handler_keys() -> set[str]:
     return set(_HANDLER_KEY.findall(source[start:]))
 
 
+def action_keys() -> set[str]:
+    from app.services.proposal_actions import PROPOSAL_ACTIONS
+
+    return set(PROPOSAL_ACTIONS)
+
+
 class ProposalCardCoverageTests(unittest.TestCase):
     def test_the_handler_list_was_actually_parsed(self) -> None:
         """Without this the parity test passes by matching nothing at all."""
@@ -74,25 +81,43 @@ class ProposalCardCoverageTests(unittest.TestCase):
         self.assertTrue(all(key.startswith("propose_") for key in keys), keys)
 
     def test_every_registered_proposal_tool_has_a_card(self) -> None:
-        missing = sorted(registered_proposal_tools() - handler_keys())
+        registered = registered_proposal_tools()
+        handlers = handler_keys()
+        actions = action_keys()
         self.assertEqual(
-            missing,
-            [],
-            "These tools can propose an action the user has no way to confirm. "
-            "Add a handler to PROPOSAL_HANDLERS in dashboard/src/features/chat/"
-            f"proposals.ts for: {', '.join(missing)}",
+            registered,
+            handlers,
+            "Registered proposal tools and dashboard handlers differ: "
+            f"registered={sorted(registered)}, dashboard={sorted(handlers)}",
+        )
+        self.assertEqual(
+            registered,
+            actions,
+            "Registered proposal tools and Telegram actions differ: "
+            f"registered={sorted(registered)}, telegram={sorted(actions)}",
         )
 
     def test_no_card_exists_for_a_tool_that_does_not(self) -> None:
         """The other direction. A handler with no tool behind it is dead code
         that looks like coverage, and it is what a rename leaves behind."""
-        orphaned = sorted(handler_keys() - registered_proposal_tools())
+        registered = registered_proposal_tools()
+        orphaned = sorted((handler_keys() | action_keys()) - registered)
         self.assertEqual(
             orphaned,
             [],
-            "PROPOSAL_HANDLERS has entries for tools the server does not "
+            "A proposal registry has entries for tools the server does not "
             f"register: {', '.join(orphaned)}",
         )
+
+    def test_executors_do_not_read_server_supplied_routes(self) -> None:
+        from app.services.proposal_actions import PROPOSAL_ACTIONS
+
+        offenders = sorted(
+            name
+            for name, action in PROPOSAL_ACTIONS.items()
+            if "endpoint" in inspect.getsource(action.execute)
+        )
+        self.assertEqual(offenders, [])
 
     def test_every_proposal_tool_is_exported_by_the_tools_package(self) -> None:
         """`__all__` drifted, and the tool it omitted was the broken one.

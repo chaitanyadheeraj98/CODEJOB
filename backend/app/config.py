@@ -275,6 +275,10 @@ class Settings(BaseSettings):
     feature_auto_poll_interval_minutes: int = 10
     feature_auto_send: bool = False
     feature_retry_queue: bool = False
+    semantic_matching_enabled: bool = Field(
+        default=False,
+        validation_alias="SEMANTIC_MATCHING_ENABLED",
+    )
     semantic_embedding_provider: str = "sbert"
     semantic_embedding_model: str = "text-embedding-3-small"
     semantic_embedding_dimension: int = 256
@@ -320,6 +324,8 @@ class Settings(BaseSettings):
     # Deprecated: read only by the one-time telegram_links startup backfill.
     telegram_action_pin: str = ""
     telegram_alerts_enabled: bool = True
+    queue_age_interactive_alert_seconds: int = Field(default=60, ge=1)
+    queue_age_bulk_alert_minutes: int = Field(default=30, ge=1)
     telegram_auth_ttl_minutes: int = 30
     feature_telegram_chat_enabled: bool = False
     telegram_chat_retention_days: int = 90

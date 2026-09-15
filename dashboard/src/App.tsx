@@ -367,11 +367,8 @@ type SettingsPayload = {
   feature_auto_send: boolean
   feature_retry_queue: boolean
   feature_ai_enabled: boolean
-  feature_ai_extractor_enabled: boolean
-  feature_semantic_enabled: boolean
-  feature_groq_job_parser_enabled: boolean
+  ai_job_intelligence: boolean
   feature_gmail_requirement_groups_enabled: boolean
-  feature_role_manifest_enabled: boolean
   feature_strict_candidate_screening_enabled: boolean
   feature_email_tracking_enabled: boolean
   feature_reply_inbox_enabled: boolean
@@ -3104,11 +3101,8 @@ function App({ account }: { account?: AuthUser }) {
     feature_auto_send: false,
     feature_retry_queue: false,
     feature_ai_enabled: false,
-    feature_ai_extractor_enabled: false,
-    feature_semantic_enabled: false,
-    feature_groq_job_parser_enabled: false,
+    ai_job_intelligence: false,
     feature_gmail_requirement_groups_enabled: false,
-    feature_role_manifest_enabled: false,
     feature_strict_candidate_screening_enabled: false,
     feature_email_tracking_enabled: false,
     feature_reply_inbox_enabled: false,
@@ -3564,11 +3558,8 @@ function App({ account }: { account?: AuthUser }) {
   const normalizeSettingsPayload = (payload: SettingsPayload): SettingsPayload => {
     return {
       ...payload,
-      feature_ai_extractor_enabled: Boolean(payload.feature_ai_extractor_enabled),
-      feature_semantic_enabled: Boolean(payload.feature_semantic_enabled),
-      feature_groq_job_parser_enabled: Boolean(payload.feature_groq_job_parser_enabled),
+      ai_job_intelligence: Boolean(payload.ai_job_intelligence),
       feature_gmail_requirement_groups_enabled: Boolean(payload.feature_gmail_requirement_groups_enabled),
-      feature_role_manifest_enabled: Boolean(payload.feature_role_manifest_enabled),
       feature_strict_candidate_screening_enabled: Boolean(payload.feature_strict_candidate_screening_enabled),
       feature_application_watches_enabled: Boolean(payload.feature_application_watches_enabled),
       feature_applications_enabled: Boolean(payload.feature_applications_enabled),
@@ -6210,11 +6201,8 @@ function App({ account }: { account?: AuthUser }) {
               <section className="liveMonitorCard configSummaryCard">
                 <h3>AI Automation Access</h3>
                 <div className="configSummaryList">
-                  {configRow('Enable AI Features', formatBool(activeConfigurationSettings.feature_ai_enabled))}
-                  {configRow('Enable AI Extractor', formatBool(activeConfigurationSettings.feature_ai_extractor_enabled))}
-                  {configRow('Enable Role Manifest Detection', formatBool(activeConfigurationSettings.feature_role_manifest_enabled))}
-                  {configRow('Enable Semantic Matching', formatBool(activeConfigurationSettings.feature_semantic_enabled))}
-                  {configRow('Enable AI Job Intent Gate', formatBool(activeConfigurationSettings.feature_groq_job_parser_enabled))}
+                  {configRow('AI Reply Writing', formatBool(activeConfigurationSettings.feature_ai_enabled))}
+                  {configRow('AI Job Intelligence', formatBool(activeConfigurationSettings.ai_job_intelligence))}
                 </div>
               </section>
 
@@ -6511,7 +6499,7 @@ function App({ account }: { account?: AuthUser }) {
                 <h2>AI Automation Access</h2>
                 <div className="stack">
                   <label className="toggleRow">
-                    <span>Enable AI Features</span>
+                    <span>AI Reply Writing</span>
                     <span className="toggleSwitch">
                       <input
                         type="checkbox"
@@ -6522,23 +6510,12 @@ function App({ account }: { account?: AuthUser }) {
                     </span>
                   </label>
                   <label className="toggleRow">
-                    <span>Enable AI Extractor</span>
+                    <span>AI Job Intelligence</span>
                     <span className="toggleSwitch">
                       <input
                         type="checkbox"
-                        checked={settings.feature_ai_extractor_enabled}
-                        onChange={(e) => setSettings({ ...settings, feature_ai_extractor_enabled: e.target.checked })}
-                      />
-                      <span className="toggleTrack" />
-                    </span>
-                  </label>
-                  <label className="toggleRow">
-                    <span>Enable Role Manifest Detection</span>
-                    <span className="toggleSwitch">
-                      <input
-                        type="checkbox"
-                        checked={settings.feature_role_manifest_enabled}
-                        onChange={(e) => setSettings({ ...settings, feature_role_manifest_enabled: e.target.checked })}
+                        checked={settings.ai_job_intelligence}
+                        onChange={(e) => setSettings({ ...settings, ai_job_intelligence: e.target.checked })}
                       />
                       <span className="toggleTrack" />
                     </span>
@@ -6548,28 +6525,6 @@ function App({ account }: { account?: AuthUser }) {
                       ? 'Detection and child drafting are active at the deployment level.'
                       : 'Detection only (dark-run). Child drafts are disabled at the deployment level.'}
                   </p>
-                  <label className="toggleRow">
-                    <span>Enable Semantic Matching</span>
-                    <span className="toggleSwitch">
-                      <input
-                        type="checkbox"
-                        checked={settings.feature_semantic_enabled}
-                        onChange={(e) => setSettings({ ...settings, feature_semantic_enabled: e.target.checked })}
-                      />
-                      <span className="toggleTrack" />
-                    </span>
-                  </label>
-                  <label className="toggleRow">
-                    <span>Enable AI Job Intent Gate</span>
-                    <span className="toggleSwitch">
-                      <input
-                        type="checkbox"
-                        checked={settings.feature_groq_job_parser_enabled}
-                        onChange={(e) => setSettings({ ...settings, feature_groq_job_parser_enabled: e.target.checked })}
-                      />
-                      <span className="toggleTrack" />
-                    </span>
-                  </label>
                   <p className="subtle">Lets an AI model make the final call on whether an email is a genuine requirement, a hotlist, or noise. Off leaves that decision to the rules taxonomy alone. Which model answers is shown under AI Access.</p>
                 </div>
               </section>

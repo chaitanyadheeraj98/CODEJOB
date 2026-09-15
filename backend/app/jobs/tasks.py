@@ -25,11 +25,11 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
     from app.services.telegram_chat_service import current_session
     from app.services.telegram_chart_render import render_chart_png_bounded
     from app.services.telegram_format import (
-        EMAIL_PROPOSAL_TOOLS,
-        email_proposal,
         format_answer,
+        proposal_card,
         unicode_chart,
     )
+    from app.services.proposal_actions import PROPOSAL_ACTIONS
     from app.telegram_bot import TelegramTransport
 
     correlation_id = uuid4().hex
@@ -50,12 +50,8 @@ def run_telegram_chat_turn(*, chat_id: int, message_id: int, text: str) -> dict[
             proposal_replies = [
                 rendered
                 for row in result.tool_rows
-                # Both email proposal tools. The renderer already handles either
-                # payload; naming only the reply tool here meant a composed
-                # email produced prose promising a card and no card - the model
-                # then apologises and "tries again", which cannot help.
-                if row.tool_name in EMAIL_PROPOSAL_TOOLS
-                for rendered in [email_proposal(row.content, row.id)]
+                if row.tool_name in PROPOSAL_ACTIONS
+                for rendered in [proposal_card(row.tool_name, row.content, row.id)]
                 if rendered is not None
             ]
             chart_replies = [
@@ -482,21 +478,37 @@ def run_automation_job(*, run_key: str, payload: dict[str, Any] | None = None) -
         update_job_progress(
             db,
             run_key=run_key,
-            total_items=1,
             status="running",
-            detail="Automation worker started.",
+            detail="Checking Gmail for new recruiter emails.",
         )
         request = AutomationRunRequest.model_validate(payload) if payload else None
         response = main._run_automation(
             request,
             db,
             run_key_override=run_key,
+            # The run reports its real size as soon as it knows it, then once per
+            # item. The sentence is composed here rather than in the service
+            # because it is read by a person in the Background tasks panel.
+            progress_callback=lambda processed, total: update_job_progress(
+                db,
+                run_key=run_key,
+                processed_items=processed,
+                total_items=total,
+                status="running",
+                detail=(
+                    f"Checking {total} recruiter {'email' if total == 1 else 'emails'}"
+                    f" - {processed} done."
+                    if total
+                    else "No unread recruiter emails matched."
+                ),
+            ),
         )
+        # No counts here: the callback above already recorded the real ones, and
+        # `update_job_progress` keeps the larger of old and new, so passing 1
+        # would only be a lie that loses to the truth.
         row = update_job_progress(
             db,
             run_key=run_key,
-            processed_items=1,
-            total_items=1,
             status=response.status,
             detail=response.detail,
             complete=True,

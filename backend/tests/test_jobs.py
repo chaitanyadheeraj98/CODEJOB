@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ from rq.job import JobStatus
 from app import main
 from app.db import Base
 from app.jobs.progress import update_job_progress
+from app.jobs import tasks
 from app.jobs.queues import get_queue
 from app.models import RecentRun, UserSettings
 from app.recent_runs import create_recent_run
@@ -26,6 +28,32 @@ class _FakeQueue:
     def enqueue(self, task, **kwargs):
         self.calls.append({"task": task, **kwargs})
         return SimpleNamespace(id=kwargs["job_id"])
+
+
+class _SummaryConnection:
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+
+    def set(self, key: str, _value: str, *, nx: bool = False):
+        if nx and key in self.keys:
+            return False
+        self.keys.add(key)
+        return True
+
+    def delete(self, key: str) -> None:
+        self.keys.discard(key)
+
+
+class _SummaryQueue:
+    def __init__(self, *, count: int, enqueued_at: datetime | None) -> None:
+        self.count = count
+        self._job = SimpleNamespace(enqueued_at=enqueued_at) if enqueued_at else None
+
+    def get_job_ids(self, _offset: int, _length: int) -> list[str]:
+        return ["oldest"] if self.count else []
+
+    def fetch_job(self, _job_id: str):
+        return self._job
 
 
 class BackgroundJobTests(unittest.TestCase):
@@ -131,6 +159,52 @@ class BackgroundJobTests(unittest.TestCase):
         self.assertEqual(payload["failed"], 1)
         self.assertEqual(payload["queued"], 0)
         self.assertEqual(payload["processing"], 0)
+        self.assertEqual(payload["queue_status"], "unknown")
+        self.assertEqual(payload["queues"], [])
+
+    def test_jobs_summary_alerts_on_age_across_all_queues_once(self) -> None:
+        connection = _SummaryConnection()
+        now = datetime.now(UTC)
+        queues = {
+            name: _SummaryQueue(count=0, enqueued_at=None)
+            for name in main.QUEUE_NAMES
+        }
+        queues[main.TELEGRAM_CHAT_QUEUE] = _SummaryQueue(
+            count=1,
+            enqueued_at=now - timedelta(seconds=61),
+        )
+        queues[main.AUTOMATION_RUN_QUEUE] = _SummaryQueue(
+            count=1,
+            enqueued_at=now - timedelta(minutes=1),
+        )
+        queues[main.GMAIL_EVENT_QUEUE] = _SummaryQueue(count=1, enqueued_at=None)
+        notifications: list[tuple[str, str]] = []
+        service = SimpleNamespace(
+            notify_owner=lambda owner_id, text: notifications.append((owner_id, text))
+        )
+        with (
+            patch.object(main, "get_redis_connection", return_value=connection),
+            patch.object(main, "get_queue", side_effect=lambda name, connection: queues[name]),
+            patch.object(main, "StartedJobRegistry", side_effect=lambda **_kwargs: SimpleNamespace(count=0)),
+            patch.object(main, "telegram_service", service),
+            patch.object(main.settings, "queue_age_interactive_alert_seconds", 60),
+            patch.object(main.settings, "queue_age_bulk_alert_minutes", 30),
+        ):
+            first = self.client.get("/jobs/summary")
+            second = self.client.get("/jobs/summary")
+
+        self.assertEqual(first.status_code, 200)
+        payload = first.json()
+        self.assertEqual(payload["queue_status"], "known")
+        self.assertEqual(len(payload["queues"]), 8)
+        states = {item["name"]: item for item in payload["queues"]}
+        self.assertTrue(states[main.TELEGRAM_CHAT_QUEUE]["alert"])
+        self.assertFalse(states[main.AUTOMATION_RUN_QUEUE]["alert"])
+        self.assertIsNone(states[main.GMAIL_EVENT_QUEUE]["oldest_queued_age_seconds"])
+        self.assertFalse(states[main.GMAIL_EVENT_QUEUE]["alert"])
+        self.assertEqual(len(notifications), 1)
+        self.assertIn("telegram_chat", notifications[0][1])
+        self.assertEqual(second.status_code, 200)
 
     def test_progress_is_monotonic_and_mirrored_to_rq_metadata(self) -> None:
         job = SimpleNamespace(meta={}, save_meta=lambda: None)
@@ -168,6 +242,93 @@ class BackgroundJobTests(unittest.TestCase):
         self.assertEqual(second.total_items, 4)
         self.assertEqual(second.progress_pct, 100.0)
         self.assertEqual(job.meta["processed_items"], 2)
+
+    def test_automation_job_records_the_run_size_it_found_not_a_placeholder(self) -> None:
+        """`run_automation_job` used to hard-code `total_items=1`, so a run over
+        twelve emails read "0 of 1" in the Background tasks panel for its whole
+        life and the bar never moved. The count now comes from the run itself."""
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db,
+                owner_id=main.settings.owner_id,
+                run_source="automation_run",
+                run_key="automation_run:sized",
+                status="queued",
+                detail="queued",
+            )
+            db.commit()
+
+        def fake_run(request, db, *, run_key_override=None, progress_callback=None, **kwargs):
+            progress_callback(0, 3)
+            for processed in (1, 2, 3):
+                progress_callback(processed, 3)
+            return SimpleNamespace(status="ready", detail="Processed 3 unread matching emails.")
+
+        with patch.object(main, "_run_automation", fake_run),                 patch.object(tasks, "SessionLocal", self.SessionLocal),                 patch("app.jobs.progress.get_current_job", return_value=None):
+            tasks.run_automation_job(run_key="automation_run:sized")
+
+        with self.SessionLocal() as db:
+            row = db.query(RecentRun).filter(RecentRun.run_key == "automation_run:sized").one()
+        self.assertEqual(row.total_items, 3)
+        self.assertEqual(row.processed_items, 3)
+        self.assertEqual(row.status, "ready")
+        self.assertEqual(row.progress_pct, 100.0)
+
+    def test_automation_progress_detail_names_the_work_while_it_is_running(self) -> None:
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db,
+                owner_id=main.settings.owner_id,
+                run_source="automation_run",
+                run_key="automation_run:detail",
+                status="queued",
+                detail="queued",
+            )
+            db.commit()
+
+        seen: list[str] = []
+
+        def fake_run(request, db, *, run_key_override=None, progress_callback=None, **kwargs):
+            progress_callback(0, 3)
+            seen.append(self._detail("automation_run:detail"))
+            progress_callback(1, 3)
+            seen.append(self._detail("automation_run:detail"))
+            return SimpleNamespace(status="ready", detail="done")
+
+        with patch.object(main, "_run_automation", fake_run),                 patch.object(tasks, "SessionLocal", self.SessionLocal),                 patch("app.jobs.progress.get_current_job", return_value=None):
+            tasks.run_automation_job(run_key="automation_run:detail")
+
+        self.assertEqual(seen[0], "Checking 3 recruiter emails - 0 done.")
+        self.assertEqual(seen[1], "Checking 3 recruiter emails - 1 done.")
+
+    def test_a_one_email_run_says_email_not_emails(self) -> None:
+        with self.SessionLocal() as db:
+            create_recent_run(
+                db,
+                owner_id=main.settings.owner_id,
+                run_source="automation_run",
+                run_key="automation_run:single",
+                status="queued",
+                detail="queued",
+            )
+            db.commit()
+
+        seen: list[str] = []
+
+        def fake_run(request, db, *, run_key_override=None, progress_callback=None, **kwargs):
+            progress_callback(1, 1)
+            seen.append(self._detail("automation_run:single"))
+            return SimpleNamespace(status="ready", detail="done")
+
+        with patch.object(main, "_run_automation", fake_run),                 patch.object(tasks, "SessionLocal", self.SessionLocal),                 patch("app.jobs.progress.get_current_job", return_value=None):
+            tasks.run_automation_job(run_key="automation_run:single")
+
+        # "1 emails" on screen reads as a bug in the product.
+        self.assertEqual(seen, ["Checking 1 recruiter email - 1 done."])
+
+    def _detail(self, run_key: str) -> str:
+        with self.SessionLocal() as db:
+            return db.query(RecentRun).filter(RecentRun.run_key == run_key).one().detail
 
     def test_status_and_cancel_follow_rq_during_post_processing_race(self) -> None:
         with self.SessionLocal() as db:

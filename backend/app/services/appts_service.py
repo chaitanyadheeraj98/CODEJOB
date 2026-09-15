@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 
 from rq import Retry
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,7 @@ from app.models import (
     EmailConversation,
     RecruiterWatch,
     UserSettings,
+    APPLICATION_STATUS_VALUES,
     utc_now,
 )
 from app.services import application_service, end_client_validation, label_tracking_service, recruiter_identity_service, resume_tracking_service
@@ -45,6 +47,93 @@ APPTS_MODELS = application_service.ApplicationModels(
     AppTSApplicationOutreachMessage,
     "AppTSApplication",
 )
+
+
+def query_applications(
+    db: Session,
+    owner_id: str,
+    *,
+    status: str | None = None,
+    q: str | None = None,
+    company: str | None = None,
+    recruiter: str | None = None,
+    end_client: str | None = None,
+    role: str | None = None,
+    has_premium_contact: bool | None = None,
+    tracked: bool | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    sort: str = "newest",
+    cursor: int = 0,
+    limit: int = 25,
+    application_id: int | None = None,
+) -> tuple[list[AppTSApplication], int, bool]:
+    if sort not in {"newest", "oldest", "next_action"}:
+        raise application_service.ApplicationValidationError("Invalid sort")
+    query = db.query(AppTSApplication).filter(
+        AppTSApplication.owner_id == owner_id,
+        AppTSApplication.deleted_at.is_(None),
+    )
+    if application_id is not None:
+        query = query.filter(AppTSApplication.id == application_id)
+    if status:
+        if status not in APPLICATION_STATUS_VALUES:
+            raise application_service.ApplicationValidationError("Invalid application status")
+        query = query.filter(AppTSApplication.status == status)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(
+            AppTSApplication.recruiter_name_snapshot.ilike(like),
+            AppTSApplication.recruiter_company_snapshot.ilike(like),
+            AppTSApplication.job_title_snapshot.ilike(like),
+            AppTSApplication.end_client_snapshot.ilike(like),
+            AppTSApplication.manual_recruiter_email.ilike(like),
+        ))
+    if company and company.strip():
+        like = f"%{company.strip()}%"
+        query = query.filter(or_(
+            AppTSApplication.recruiter_company_snapshot.ilike(like),
+            AppTSApplication.end_client_snapshot.ilike(like),
+        ))
+    if recruiter and recruiter.strip():
+        like = f"%{recruiter.strip()}%"
+        query = query.filter(or_(
+            AppTSApplication.recruiter_name_snapshot.ilike(like),
+            AppTSApplication.manual_recruiter_email.ilike(like),
+        ))
+    if end_client and end_client.strip():
+        query = query.filter(AppTSApplication.end_client_snapshot.ilike(f"%{end_client.strip()}%"))
+    if role and role.strip():
+        query = query.filter(AppTSApplication.job_title_snapshot.ilike(f"%{role.strip()}%"))
+    if has_premium_contact is not None:
+        query = query.filter(
+            AppTSApplication.recruiter_contact_id.is_not(None)
+            if has_premium_contact
+            else AppTSApplication.recruiter_contact_id.is_(None)
+        )
+    if tracked is not None:
+        query = query.filter(
+            AppTSApplication.recruiter_opportunity_id.is_not(None)
+            if tracked
+            else AppTSApplication.recruiter_opportunity_id.is_(None)
+        )
+    if date_from is not None:
+        query = query.filter(AppTSApplication.created_at >= date_from)
+    if date_to is not None:
+        query = query.filter(AppTSApplication.created_at < date_to)
+    total = query.count()
+    if sort == "oldest":
+        query = query.order_by(AppTSApplication.created_at.asc(), AppTSApplication.id.asc())
+    elif sort == "next_action":
+        query = query.order_by(
+            AppTSApplication.next_action_at.is_(None),
+            AppTSApplication.next_action_at.asc(),
+            AppTSApplication.id.asc(),
+        )
+    else:
+        query = query.order_by(AppTSApplication.created_at.desc(), AppTSApplication.id.desc())
+    rows = query.offset(cursor).limit(limit + 1).all()
+    return rows[:limit], total, len(rows) > limit
 
 
 def enqueue_embedding_generation(record_id: int) -> None:

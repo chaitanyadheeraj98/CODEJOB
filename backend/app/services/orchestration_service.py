@@ -491,9 +491,7 @@ class OrchestrationService:
         _, _, errors = self._sync_label_tracking(db, user_settings)
         return matched, created, errors
 
-    def _detect_role_manifest_if_enabled(self, user_settings: UserSettings, body: str) -> RoleManifestResult | None:
-        if not user_settings.feature_role_manifest_enabled:
-            return None
+    def _detect_role_manifest(self, body: str) -> RoleManifestResult:
         return RoleManifestService(max_rung=2).detect(body)
 
     def _expand_and_extract_children(
@@ -767,9 +765,10 @@ class OrchestrationService:
                     recruiter_like_warning = "non_recruiter_like_gmail"
 
                 parse_body = prepare_gmail_parse_body(item["body"])
-                manifest_result = self._detect_role_manifest_if_enabled(user_settings, parse_body)
-                item_ai_extractor_enabled = user_settings.feature_ai_extractor_enabled and (
-                    manifest_result is None or manifest_result.status != "multiple"
+                manifest_result = self._detect_role_manifest(parse_body)
+                item_ai_extractor_enabled = (
+                    user_settings.feature_ai_extractor_enabled
+                    and manifest_result.status != "multiple"
                 )
                 parsed, parser_details = self.deps.parse_email_with_details(
                     item["subject"],
@@ -1164,6 +1163,7 @@ class OrchestrationService:
         *,
         run_key_override: str | None = None,
         items_override: list[GmailMessageCandidate] | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> AutomationRunResponse:
         run_key = run_key_override or automation_run_key(str(uuid.uuid4()))
         recent_run = db.query(RecentRun).filter(RecentRun.run_key == run_key).first()
@@ -1263,6 +1263,12 @@ class OrchestrationService:
             self.deps.log_gmail_labeling_stats()
             return response
 
+        # Report the size before any item is handled. Until this existed the job
+        # wrapper guessed `total_items=1`, so a run over twelve emails showed
+        # "0 of 1" for its whole life and the bar never moved.
+        if progress_callback is not None:
+            progress_callback(0, len(items))
+
         if user_settings.feature_reply_inbox_enabled:
             # Candidates here come from the JD-scan query, which can also match a reply on
             # a thread we already have a conversation for (e.g. its subject still says "Java
@@ -1308,6 +1314,7 @@ class OrchestrationService:
                     model_name=self.deps.model_name,
                     run_source=RUN_SOURCE_AUTOMATION,
                     run_key=run_key,
+                    progress_callback=progress_callback,
                     deps=RunOrchestratorDependencies(
                         parse_email=self.deps.parse_email,
                         parse_email_with_details=self.deps.parse_email_with_details,

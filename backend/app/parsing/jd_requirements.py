@@ -341,16 +341,38 @@ def structured_requirements_from_ai_payload(
     if not informational_groups:
         informational_groups.extend(fallback.informational_groups)
 
+    raw_visa_hints = payload.get("visa_hints") or []
+    if isinstance(raw_visa_hints, str):
+        raw_visa_hints = [raw_visa_hints]
+    if raw_visa_hints:
+        from app.services.eligibility_service import normalize_authorization
+
+        ai_authorizations = _dedupe_strings(
+            normalize_authorization(value)
+            for value in extract_work_authorizations(
+                "\n".join(f"Visa: {hint}" for hint in raw_visa_hints if str(hint).strip())
+            )
+        )
+    else:
+        ai_authorizations = ()
+
+    mentioned_locations = payload.get("mentioned_locations") or []
+    if isinstance(mentioned_locations, str):
+        mentioned_locations = [mentioned_locations]
+    ai_locations = _dedupe_strings(
+        [str(payload.get("primary_location") or ""), *(str(value) for value in mentioned_locations)]
+    )
+
     return ParsedJDRequirements(
         required_groups=tuple(required_groups),
         preferred_groups=tuple(preferred_groups),
         informational_groups=tuple(informational_groups),
         experience_years_min=int(payload.get("experience_years_min")) if payload.get("experience_years_min") not in (None, "") else fallback.experience_years_min,
         us_experience_years_min=fallback.us_experience_years_min,
-        allowed_work_authorizations=fallback.allowed_work_authorizations,
+        allowed_work_authorizations=ai_authorizations if raw_visa_hints else fallback.allowed_work_authorizations,
         local_required=fallback.local_required,
         work_mode=str(payload.get("work_mode") or fallback.work_mode or "").strip() or fallback.work_mode,
-        locations=_dedupe_strings([str(payload.get("primary_location") or "").strip(), *fallback.locations]),
+        locations=ai_locations or fallback.locations,
         warnings=fallback.warnings,
         preferred_domains=fallback.preferred_domains,
         excluded_skills=_dedupe_strings(payload.get("excluded_skills") or fallback.excluded_skills),

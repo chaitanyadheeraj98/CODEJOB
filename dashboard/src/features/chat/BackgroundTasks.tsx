@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   isActive,
-  jobLabel,
+  jobHeadline,
   listBackgroundJobs,
   progressText,
   statusLabel,
@@ -54,7 +54,7 @@ function JobRow({ job, apiBase, onChanged }: { job: BackgroundJob; apiBase: stri
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="bgTaskName">{jobLabel(job)}</span>
+        <span className="bgTaskName">{jobHeadline(job)}</span>
         <span className="bgTaskStatus">{statusLabel(job.status)}</span>
       </button>
 

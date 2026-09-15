@@ -299,6 +299,86 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(skipped_item.reason_code, "approved_sent_duplicate")
             self.assertEqual(skipped_item.gmail_message_url, "https://mail.google.com/mail/u/0/#all/m-1")
 
+    def test_every_item_reports_progress_including_the_ones_that_are_skipped(self) -> None:
+        """The panel showed "0 of 1" for a whole run because nothing reported.
+
+        Skipped items are most of a typical run and each one leaves the loop body
+        through its own `continue`, so a report written at the bottom of that body
+        would count almost nothing. This asserts the count reaches the total.
+        """
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            for index in range(3):
+                db.add(
+                    RecruiterEmail(
+                        owner_id="default-owner",
+                        sender="r@example.com",
+                        subject="Role",
+                        body="Body",
+                        role="Java",
+                        location="hybrid",
+                        salary_text="",
+                        skills_text="java",
+                        score=90,
+                        decision="Qualified",
+                        state="approved_sent",
+                        draft_reply="draft",
+                        source="gmail",
+                        external_message_id=f"skip-{index}",
+                        external_thread_id=f"t-{index}",
+                    )
+                )
+            db.commit()
+            deps, _marked, _events = self._deps()
+            reports: list[tuple[int, int]] = []
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[self._item(f"skip-{index}") for index in range(3)],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy={},
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:progress",
+                    deps=deps,
+                    progress_callback=lambda processed, total: reports.append((processed, total)),
+                )
+            )
+            self.assertEqual(result.skipped_count, 3)
+            self.assertEqual(reports, [(1, 3), (2, 3), (3, 3)])
+
+    def test_a_run_without_a_progress_callback_still_processes_every_item(self) -> None:
+        with Session(self.engine) as db:
+            user_settings = self._seed_user_settings(db, feature_ai_enabled=False)
+            resume = self._seed_resume(db)
+            deps, _marked, _events = self._deps()
+            result = RunOrchestrator().execute(
+                RunOrchestratorRequest(
+                    db=db,
+                    owner_id="default-owner",
+                    items=[],
+                    user_settings=user_settings,
+                    resume=resume,
+                    active_resume=resume,
+                    enabled_resumes=[resume],
+                    effective_policy={},
+                    threshold=0.6,
+                    dry_run=False,
+                    model_name="deepseek-chat",
+                    run_source="automation_run",
+                    run_key="automation_run:no-callback",
+                    deps=deps,
+                )
+            )
+            self.assertEqual(result.matched_count, 0)
+
     def test_strict_eligibility_mismatch_stops_before_resume_scoring_and_drafting(self) -> None:
         with Session(self.engine) as db:
             user_settings = self._seed_user_settings(db, feature_ai_enabled=True)
@@ -987,7 +1067,7 @@ class RunOrchestratorTests(unittest.TestCase):
             self.assertEqual(row.resume_picker_candidates_json, '{"rankings":[{"resume_file_name":"resume.pdf","final_resume_score":0.83}]}')
             self.assertEqual(row.resume_picker_breakdown_json, '{"matched_priority_skills":["Java"],"missing_priority_skills":["Oracle"]}')
 
-    def test_multi_role_item_skips_full_body_ai_extractor_and_creates_children(self) -> None:
+    def test_multi_role_item_suppresses_ai_extractor_even_when_manifest_flag_is_off(self) -> None:
         from unittest.mock import patch
 
         from app.services.role_manifest_service import RoleManifestService
@@ -1010,7 +1090,7 @@ class RunOrchestratorTests(unittest.TestCase):
 
         with Session(self.engine) as db:
             user_settings = self._seed_user_settings(db, feature_ai_enabled=False, feature_ai_extractor_enabled=True)
-            user_settings.feature_role_manifest_enabled = True
+            user_settings.feature_role_manifest_enabled = False
             db.commit()
             resume = self._seed_resume(db)
             deps, marked, _events = self._deps()

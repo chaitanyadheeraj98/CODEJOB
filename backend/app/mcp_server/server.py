@@ -12,6 +12,7 @@ from app.mcp_server.tools import (
     get_chart,
     get_conversation,
     get_draft_status,
+    get_label_thread_dossier,
     get_metrics,
     get_recent_runs,
     get_record_details,
@@ -21,13 +22,17 @@ from app.mcp_server.tools import (
     get_recruiter_replies,
     get_run_items,
     get_settings_summary,
+    get_tracked_application,
     list_candidate_documents,
     list_chat_attachments,
     list_contact_numbers,
     list_conversations,
     list_external_opportunities,
+    list_gmail_labels,
+    list_label_threads,
     list_recruiter_opportunities,
     list_scheduled_tasks,
+    list_tracked_applications,
     list_resume_drafts,
     list_resumes,
     navigate_to_queue,
@@ -112,6 +117,8 @@ BASE_TOOLS = (
     compare_records,
     # Read-only: it returns options, never a pick.
     resolve_record_reference,
+    list_tracked_applications,
+    get_tracked_application,
 )
 
 # MCP shares the API's trusted-host exposure. Tools only read or propose;
@@ -184,6 +191,9 @@ SCHEDULING_TOOLS = (
 # above are protecting - and offer to track a thread the app cannot see.
 LABEL_TRACKING_TOOLS = (
     resolve_record_by_message_id,
+    list_gmail_labels,
+    list_label_threads,
+    get_label_thread_dossier,
 )
 
 # Split from the pair above because proposing a write is gated twice: the

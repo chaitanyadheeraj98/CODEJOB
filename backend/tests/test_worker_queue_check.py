@@ -16,6 +16,8 @@ from scripts.check_worker_queues import declared_queues, main, worker_queues
 
 COMPOSE_SNIPPET = """  worker:
     command: rq worker gmail_sync nvoids_sync --url redis://redis:6379/0 --with-scheduler
+  worker-manual:
+    command: rq worker manual_intake --url redis://redis:6379/0
 """
 
 QUEUES_SNIPPET = '''
@@ -32,7 +34,7 @@ class WorkerQueueCheckTests(unittest.TestCase):
         self.assertEqual(main(), 0)
 
     def test_the_worker_command_is_parsed_not_guessed(self) -> None:
-        self.assertEqual(worker_queues(COMPOSE_SNIPPET), ["gmail_sync", "nvoids_sync"])
+        self.assertEqual(worker_queues(COMPOSE_SNIPPET), ["gmail_sync", "nvoids_sync", "manual_intake"])
 
     def test_only_the_constants_are_read_not_the_frozenset_body(self) -> None:
         """QUEUE_NAMES repeats the names; counting those would hide a drift."""
@@ -42,10 +44,14 @@ class WorkerQueueCheckTests(unittest.TestCase):
         )
 
     def test_a_queue_no_worker_consumes_is_detected(self) -> None:
-        """Guards the guard: manual_intake declared, absent from the command."""
+        """Guards the guard: manual_intake declared, absent from every command."""
         declared = set(declared_queues(QUEUES_SNIPPET))
-        consumed = set(worker_queues(COMPOSE_SNIPPET))
+        consumed = set(worker_queues(COMPOSE_SNIPPET.replace("manual_intake", "scheduled_task")))
         self.assertEqual(sorted(declared - consumed), ["manual_intake"])
+
+    def test_no_worker_command_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            worker_queues("services:\n  worker:\n    command: python app.py\n")
 
 
 if __name__ == "__main__":
