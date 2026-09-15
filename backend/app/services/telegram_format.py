@@ -5,6 +5,8 @@ from html.parser import HTMLParser
 import re
 import json
 
+from app.services.proposal_actions import PROPOSAL_ACTIONS
+
 
 def escape(value: object) -> str:
     return html_escape(str(value), quote=True)
@@ -175,6 +177,55 @@ def email_proposal(content: str, message_id: int) -> tuple[str, list[list[dict[s
     lines.extend(("<b>Body preview:</b>", f"<pre>{escape(preview)}</pre>"))
     keyboard = [[
         {"text": "Send", "callback_data": f"act:prop:send:{message_id}"},
+        {"text": "Cancel", "callback_data": f"act:prop:cancel:{message_id}"},
+    ]]
+    assert all(len(button["callback_data"].encode()) <= 64 for row in keyboard for button in row)
+    return "\n".join(lines), keyboard
+
+
+def proposal_card(
+    tool_name: str,
+    content: str,
+    message_id: int,
+) -> tuple[str, list[list[dict[str, str]]] | None] | None:
+    if tool_name in EMAIL_PROPOSAL_TOOLS:
+        return email_proposal(content, message_id)
+    action = PROPOSAL_ACTIONS.get(tool_name)
+    if action is None:
+        return None
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("status") == "missing_fields":
+        missing = payload.get("missing")
+        if not isinstance(missing, list) or not all(isinstance(value, str) and value for value in missing):
+            return None
+        return f"I need {escape(', '.join(missing))} before I can prepare that action.", None
+    error = payload.get("error")
+    if isinstance(error, str) and error.strip():
+        return (
+            "<b>No confirmation card was created, so nothing has happened.</b>\n"
+            + escape(error.strip()),
+            None,
+        )
+    if not payload.get("action"):
+        return None
+    try:
+        rows = action.summary(payload)
+        confirm_label = action.confirm_label(payload).strip() or "Confirm"
+        reversible = action.reversible(payload) if callable(action.reversible) else action.reversible
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not rows:
+        return None
+    lines = ["<b>Action ready to confirm</b>"]
+    lines.extend(f"<b>{escape(label)}:</b> {escape(value)}" for label, value in rows)
+    lines.append(f"<b>Reversible:</b> {'Yes' if reversible else 'No'}")
+    keyboard = [[
+        {"text": confirm_label, "callback_data": f"act:prop:send:{message_id}"},
         {"text": "Cancel", "callback_data": f"act:prop:cancel:{message_id}"},
     ]]
     assert all(len(button["callback_data"].encode()) <= 64 for row in keyboard for button in row)

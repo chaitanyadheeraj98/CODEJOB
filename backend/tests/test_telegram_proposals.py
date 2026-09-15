@@ -9,7 +9,8 @@ from app.db import Base
 from app.models import ChatMessage, ChatSession, UserSettings
 from app.runtime_state import runtime_state
 from app.services.chat_service import ChatService
-from app.services.telegram_format import email_proposal, plain_text
+from app.services.proposal_actions import PROPOSAL_ACTIONS
+from app.services.telegram_format import EMAIL_PROPOSAL_TOOLS, email_proposal, plain_text, proposal_card
 from app.services.telegram_runtime_service import TelegramRuntime, TelegramRuntimeDeps
 from app.telegram_bot import TelegramReply
 
@@ -101,6 +102,156 @@ def test_malformed_or_incomplete_payload_renders_nothing() -> None:
 def test_missing_fields_payload_is_a_question_without_buttons() -> None:
     rendered = email_proposal(json.dumps({"status": "missing_fields", "missing": ["body"]}), 1)
     assert rendered == ("I need body before I can prepare that email.", None)
+
+
+GENERIC_PAYLOADS = {
+    "propose_candidate_action": {
+        "action": "propose_candidate_action",
+        "candidate_action": "track",
+        "label": "Track",
+        "candidate_ids": [1],
+        "count": 1,
+        "reversible": True,
+        "reversible_detail": "Can be undone.",
+    },
+    "propose_bulk_approve_candidates": {
+        "action": "approve_candidates",
+        "candidate_ids": [9675],
+        "count": 1,
+    },
+    "propose_record_update": {
+        "action": "propose_record_update",
+        "record_kind": "application",
+        "record_id": 2,
+        "record_label": "Platform Lead",
+        "fields": {"status": "interview_1"},
+        "changes": [{"field": "status", "from": "applied", "to": "interview_1"}],
+    },
+    "propose_track_record": {
+        "action": "propose_track_record",
+        "record_kind": "requirement",
+        "record_label": "Platform role",
+        "recruiter": "Pat",
+        "labels": ["Jobs"],
+        "resume": "Resume.pdf",
+        "fields": {"resume_asset_id": 1, "recruiter_email_id": 2, "dedupe_key": "key"},
+    },
+    "propose_add_note": {
+        "action": "propose_add_note",
+        "record_kind": "application",
+        "record_id": 2,
+        "record_label": "Platform role",
+        "note": "Followed up",
+    },
+    "propose_create_premium_contact": {
+        "action": "create_premium_contact",
+        "fields": {"name": "Pat", "phone": "2145551212", "role": "recruiter"},
+    },
+    "propose_manual_requirement": {
+        "action": "propose_manual_requirement",
+        "source_label": "message 3",
+        "message_id": 3,
+        "characters": 120,
+        "jd_text": "Build APIs",
+    },
+    "propose_nvoids_search": {
+        "action": "propose_nvoids_search",
+        "company": "Acme",
+        "criteria": {"end_client": "Acme", "query_mode": "composed", "batch_limit": 10},
+        "already_stored": 2,
+    },
+    "propose_taxonomy_bulk_review": {
+        "action": "propose_taxonomy_bulk_review",
+        "scope": "skill",
+        "taxonomy_action": "approve",
+        "label": "Approve",
+        "keys": ["python"],
+        "sample_names": ["Python"],
+        "reversible": True,
+    },
+    "propose_scheduled_task": {
+        "action": "propose_scheduled_task",
+        "operation": "create",
+        "title": "Follow up",
+        "kind": "reminder",
+        "trigger": "tomorrow",
+        "permitted_actions": "notify",
+        "reversible": True,
+    },
+    "propose_profile_update": {
+        "action": "propose_profile_update",
+        "operation": "append",
+        "field": "Location",
+        "value": "Austin",
+        "entry": "Location: Austin",
+        "resulting_profile": "Location: Austin",
+    },
+    "propose_resume_draft": {
+        "action": "propose_resume_draft",
+        "name": "Platform draft",
+        "source_variant_code": "R01",
+        "source_file_name": "Resume.pdf",
+        "source_characters": 5000,
+    },
+    "propose_resume_section": {
+        "action": "propose_resume_section",
+        "draft_id": 4,
+        "draft_name": "Platform draft",
+        "section": "Summary",
+        "current": "Built APIs",
+        "replacement": "Built reliable APIs",
+    },
+    "propose_create_github_issue": {
+        "action": "create_github_issue",
+        "title": "Card missing",
+        "user_report": "I do not see the card",
+        "ai_summary": "Telegram omitted a proposal card",
+    },
+}
+
+
+def test_every_generic_proposal_renders_a_summary_and_two_buttons() -> None:
+    assert set(GENERIC_PAYLOADS) == set(PROPOSAL_ACTIONS) - EMAIL_PROPOSAL_TOOLS
+    for tool_name, payload in GENERIC_PAYLOADS.items():
+        rendered = proposal_card(tool_name, json.dumps(payload), 91)
+        assert rendered is not None, tool_name
+        text, keyboard = rendered
+        assert "Action ready to confirm" in plain_text(text), tool_name
+        assert PROPOSAL_ACTIONS[tool_name].summary(payload), tool_name
+        assert keyboard is not None and len(keyboard[0]) == 2, tool_name
+
+
+def test_generic_missing_fields_is_a_question_without_buttons() -> None:
+    rendered = proposal_card(
+        "propose_add_note",
+        json.dumps({"status": "missing_fields", "missing": ["note"]}),
+        1,
+    )
+    assert rendered == ("I need note before I can prepare that action.", None)
+
+
+def test_generic_error_is_a_refusal_without_buttons() -> None:
+    rendered = proposal_card("propose_add_note", json.dumps({"error": "Record not found"}), 1)
+    assert rendered is not None
+    assert "nothing has happened" in plain_text(rendered[0])
+    assert rendered[1] is None
+
+
+def test_generic_summary_escapes_untrusted_fields() -> None:
+    payload = {**GENERIC_PAYLOADS["propose_add_note"], "note": "<b>do not trust me</b>"}
+    rendered = proposal_card("propose_add_note", json.dumps(payload), 1)
+    assert rendered is not None
+    assert "&lt;b&gt;do not trust me&lt;/b&gt;" in rendered[0]
+
+
+def test_candidate_action_card_shows_reversibility() -> None:
+    rendered = proposal_card(
+        "propose_candidate_action",
+        json.dumps(GENERIC_PAYLOADS["propose_candidate_action"]),
+        1,
+    )
+    assert rendered is not None
+    assert "Reversible: Yes" in plain_text(rendered[0])
 
 
 def test_confirm_sends_and_records_event() -> None:
